@@ -1,0 +1,50 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Local-only config
+configs/local_settings.yaml
+
+# Runtime data (keep folder structure with .gitkeep)
+data/screenshots/*
+!data/screenshots/.gitkeep
+
+data/traces/*
+!data/traces/.gitkeep
+
+data/workflows/*
+!data/workflows/.gitkeep
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temp
+temp/
+tmp/
