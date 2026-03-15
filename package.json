@@ -1,0 +1,30 @@
+{
+  "name": "llm-desktop-workflow-automation",
+  "version": "1.0.0",
+  "description": "This project explores LLM-based desktop workflow automation on Windows. Users describe tasks in natural language, which are executed and recorded in a reusable form. Previously recorded workflows are replayed for similar requests, improving reliability and efficiency for repeated desktop tasks.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx src/test-notepad.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umtsndg/llm-desktop-workflow-automation.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/umtsndg/llm-desktop-workflow-automation/issues"
+  },
+  "homepage": "https://github.com/umtsndg/llm-desktop-workflow-automation#readme",
+  "dependencies": {
+    "@computer-use/nut-js": "^4.2.0",
+    "screenshot-desktop": "^1.15.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
