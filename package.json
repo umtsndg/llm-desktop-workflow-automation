@@ -4,7 +4,7 @@
   "description": "This project explores LLM-based desktop workflow automation on Windows. Users describe tasks in natural language, which are executed and recorded in a reusable form. Previously recorded workflows are replayed for similar requests, improving reliability and efficiency for repeated desktop tasks.",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx src/test-notepad.ts",
+    "dev": "tsx src/test-sort-salary.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

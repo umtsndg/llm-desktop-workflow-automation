@@ -35,6 +35,7 @@ const keyMap: Record<string, Key> = {
     down: Key.Down,
     left: Key.Left,
     right: Key.Right,
+    home: Key.Home,
     a: Key.A,
     b: Key.B,
     c: Key.C,
