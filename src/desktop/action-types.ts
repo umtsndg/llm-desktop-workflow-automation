@@ -5,7 +5,9 @@ export type DesktopAction =
     | { type: 'click'; x?: number; y?: number; button?: MouseButton; double?: boolean }
     | { type: 'typeText'; text: string; delayMs?: number }
     | { type: 'pressKey'; key: string }
+    | { type: 'releaseKey'; key: string }
     | { type: 'hotkey'; keys: string[] }
+    | { type: 'focusWindow'; title: string; match?: 'contains' | 'exact' }
     | { type: 'wait'; ms: number }
     | { type: 'scroll'; amount: number; direction?: 'up' | 'down' }
     | { type: 'launchApp'; command: string; args?: string[] };

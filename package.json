@@ -5,6 +5,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx src/test-sort-salary.ts",
+    "cli": "tsx src/cli.ts",
+    "example:notepad-agent": "tsx src/test-llm-loop-excel-chart.ts",
+    "test-sort-salary": "tsx src/test-sort-salary.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -20,6 +23,7 @@
   "homepage": "https://github.com/umtsndg/llm-desktop-workflow-automation#readme",
   "dependencies": {
     "@computer-use/nut-js": "^4.2.0",
+    "sharp": "^0.33.5",
     "screenshot-desktop": "^1.15.3"
   },
   "devDependencies": {
