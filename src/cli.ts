@@ -1,24 +1,36 @@
+import { promises as fs } from 'node:fs';
+
 import { NutJsDesktopOperator } from './desktop/NutJsDesktopOperator';
 import { DesktopActionPlanner } from './llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from './llm/IterativeDesktopAgent';
 import { LoggingChatClient } from './llm/LoggingChatClient';
 import { OpenAIChatClient } from './llm/OpenAIChatClient';
+import { RecordingDesktopOperator } from './workflows/RecordingDesktopOperator';
+import type { RecordedWorkflow } from './workflows/recorded-workflow';
+import { replayRecordedWorkflow } from './workflows/replay';
+import { saveRecordedWorkflow } from './workflows/workflow-store';
+import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from './workflows/retrieval';
 
 function usage(): string {
     return [
         'Usage:',
         '  npm run cli -- plan "<task>" [--screenshot] [--showLlm]',
-        '  npm run cli -- run  "<task>" [--screenshot] [--showLlm]',
-        '  npm run cli -- loop "<task>" [--maxIterations N] [--no-verify] [--no-perception] [--showLlm]',
+        '  npm run cli -- run  "<task>" [--screenshot] [--showLlm] [--record]',
+        '  npm run cli -- loop "<task>" [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--record]',
+        '  npm run cli -- replay "<recordingFile>" [--no-robust]',
+        '  npm run cli -- match "<task>" [--limit N] [--threshold S]',
+        '  npm run cli -- auto "<task>" [--threshold S] [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--no-robust] [--no-record]',
         '',
         'Environment:',
-        '  OPENAI_API_KEY (required)',
+        '  OPENAI_API_KEY (required for plan/run/loop)',
         '  OPENAI_MODEL (optional)',
         '  OPENAI_BASE_URL (optional)',
         '',
         'Notes:',
         '  - Outputs JSON to stdout (easy to pipe/log).',
         '  - --showLlm prints raw model responses to stderr.',
+        '  - --record saves a successful run/loop to recordings/.',
+        '  - match/auto look in ./recordings for reusable workflows.',
         '  - Use Ctrl+C to stop if automation goes wrong.',
     ].join('\n');
 }
@@ -102,16 +114,18 @@ function promptHidden(prompt: string): Promise<string> {
     });
 }
 
-function parseArgs(argv: string[]): { cmd: string; task: string; flags: Record<string, string | boolean> } {
+type Parsed = { cmd: string; arg: string; flags: Record<string, string | boolean> };
+
+function parseArgs(argv: string[]): Parsed {
     const args = argv.slice(2);
     const first = args[0];
-    if (!first || first === '--help' || first === '-h') {
-        return { cmd: 'help', task: '', flags: { help: true } };
+    if (!first) {
+        return { cmd: 'help', arg: '', flags: { help: true } };
     }
 
     const cmd = String(args.shift());
     if (cmd === 'help') {
-        return { cmd: 'help', task: '', flags: { help: true } };
+        return { cmd: 'help', arg: '', flags: { help: true } };
     }
 
     const flags: Record<string, string | boolean> = {};
@@ -146,16 +160,16 @@ function parseArgs(argv: string[]): { cmd: string; task: string; flags: Record<s
         positionals.push(a);
     }
 
-    const task = positionals.join(' ').trim();
-    if (!task && !flags.help) {
-        throw new Error('Missing task string. Wrap it in quotes.');
+    const arg = positionals.join(' ').trim();
+    if (!arg && !flags.help) {
+        throw new Error('Missing argument. Wrap it in quotes.');
     }
 
-    return { cmd, task, flags };
+    return { cmd, arg, flags };
 }
 
 async function main() {
-    const { cmd, task, flags } = parseArgs(process.argv);
+    const { cmd, arg, flags } = parseArgs(process.argv);
 
     if (flags.help) {
         console.log(usage());
@@ -163,16 +177,58 @@ async function main() {
     }
 
     // Only prompt for credentials when we are actually going to call the LLM.
-    if (cmd === 'plan' || cmd === 'run' || cmd === 'loop') {
+    if (cmd === 'plan' || cmd === 'run' || cmd === 'loop' || cmd === 'auto') {
         await ensureApiKeyInEnv();
     }
 
-    const showLlm = Boolean(flags.showLlm || flags['show-llm']);
-    const baseLlm = new OpenAIChatClient();
-    const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
-    const operator = new NutJsDesktopOperator();
+    if (cmd === 'match') {
+        const task = arg;
+        const limit = typeof flags.limit === 'string' ? Number(flags.limit) : 5;
+        const threshold = typeof flags.threshold === 'string' ? Number(flags.threshold) : 0.55;
+
+        const workflows = await loadRecordedWorkflows();
+        const ranked = rankRecordedWorkflows(task, workflows, { limit: Number.isFinite(limit) ? limit : 5 });
+        const best = ranked[0] ?? null;
+        const reusable = best ? best.score >= threshold : false;
+
+        console.log(
+            JSON.stringify(
+                {
+                    ok: true,
+                    recordingsFound: workflows.length,
+                    threshold,
+                    reusable,
+                    best: best
+                        ? {
+                            path: best.path,
+                            score: best.score,
+                            details: best.details,
+                            workflowTask: best.workflow.task,
+                            endedAt: best.workflow.endedAt,
+                        }
+                        : null,
+                    top: ranked.map((m) => ({
+                        path: m.path,
+                        score: m.score,
+                        details: m.details,
+                        workflowTask: m.workflow.task,
+                        endedAt: m.workflow.endedAt,
+                    })),
+                },
+                null,
+                2
+            )
+        );
+        return;
+    }
 
     if (cmd === 'plan') {
+        const task = arg;
+        const showLlm = Boolean(flags.showLlm || flags['show-llm']);
+        const baseLlm = new OpenAIChatClient();
+        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+        const operator = new NutJsDesktopOperator();
+
         const planner = new DesktopActionPlanner(llm);
         const actions = await planner.plan(task, operator, {
             includeScreenshot: Boolean(flags.screenshot),
@@ -182,28 +238,157 @@ async function main() {
     }
 
     if (cmd === 'run') {
+        const task = arg;
+        const showLlm = Boolean(flags.showLlm || flags['show-llm']);
+        const baseLlm = new OpenAIChatClient();
+        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+
+        const baseDesktop = new NutJsDesktopOperator();
+        const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
+
         const planner = new DesktopActionPlanner(llm);
-        const actions = await planner.plan(task, operator, {
+        const actions = await planner.plan(task, baseDesktop, {
             includeScreenshot: Boolean(flags.screenshot),
         });
-        const results = await operator.execute(actions);
-        console.log(JSON.stringify({ actions, results }, null, 2));
+
+        const results = await executor.execute(actions);
+        const ok = results.every((r) => r.ok);
+
+        let recordingPath: string | undefined;
+        if (ok && executor instanceof RecordingDesktopOperator) {
+            const workflow = executor.finish(true);
+            recordingPath = await saveRecordedWorkflow(workflow);
+        }
+
+        console.log(JSON.stringify({ ok, actions, results, recordingPath }, null, 2));
         return;
     }
 
     if (cmd === 'loop') {
+        const task = arg;
+        const showLlm = Boolean(flags.showLlm || flags['show-llm']);
+        const baseLlm = new OpenAIChatClient();
+        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+
+        const baseDesktop = new NutJsDesktopOperator();
+        const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
+
         const agent = new IterativeDesktopAgent(llm);
         const maxIterations = typeof flags.maxIterations === 'string' ? Number(flags.maxIterations) : undefined;
         const includePerception = flags.perception === false ? false : true;
         const verifyOnDone = flags.verify === false ? false : true;
 
-        const out = await agent.run(task, operator, {
+        const out = await agent.run(task, executor, {
             maxIterations: Number.isFinite(maxIterations as number) ? (maxIterations as number) : undefined,
             includePerception,
             verifyOnDone,
         });
 
-        console.log(JSON.stringify(out, null, 2));
+        let recordingPath: string | undefined;
+        if (out.ok && executor instanceof RecordingDesktopOperator) {
+            const workflow = executor.finish(true);
+            recordingPath = await saveRecordedWorkflow(workflow);
+        }
+
+        console.log(JSON.stringify({ ...out, recordingPath }, null, 2));
+        return;
+    }
+
+    if (cmd === 'replay') {
+        const recordingFile = arg;
+        const robust = flags.robust === false ? false : true;
+
+        const raw = await fs.readFile(recordingFile, 'utf8');
+        const workflow = JSON.parse(raw) as RecordedWorkflow;
+
+        const desktop = new NutJsDesktopOperator();
+        const result = await replayRecordedWorkflow(desktop, workflow, { robust });
+        console.log(JSON.stringify(result, null, 2));
+        return;
+    }
+
+    if (cmd === 'auto') {
+        const task = arg;
+        const threshold = typeof flags.threshold === 'string' ? Number(flags.threshold) : 0.55;
+        const robust = flags.robust === false ? false : true;
+        const record = flags.record === false ? false : true;
+
+        const workflows = await loadRecordedWorkflows();
+        const match = bestWorkflowMatch(task, workflows, { minScore: Number.isFinite(threshold) ? threshold : 0.55 });
+
+        if (match) {
+            const desktop = new NutJsDesktopOperator();
+            const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust });
+            if (replayResult.ok) {
+                console.log(
+                    JSON.stringify(
+                        {
+                            ok: true,
+                            reused: true,
+                            match: {
+                                path: match.path,
+                                score: match.score,
+                                details: match.details,
+                                workflowTask: match.workflow.task,
+                                endedAt: match.workflow.endedAt,
+                            },
+                            replay: replayResult,
+                        },
+                        null,
+                        2
+                    )
+                );
+                return;
+            }
+        }
+
+        // Fallback to LLM loop (repair/update), then optionally store the improved execution.
+        const showLlm = Boolean(flags.showLlm || flags['show-llm']);
+        const baseLlm = new OpenAIChatClient();
+        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+
+        const baseDesktop = new NutJsDesktopOperator();
+        const executor = record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
+
+        const agent = new IterativeDesktopAgent(llm);
+        const maxIterations = typeof flags.maxIterations === 'string' ? Number(flags.maxIterations) : undefined;
+        const includePerception = flags.perception === false ? false : true;
+        const verifyOnDone = flags.verify === false ? false : true;
+
+        const out = await agent.run(task, executor, {
+            maxIterations: Number.isFinite(maxIterations as number) ? (maxIterations as number) : undefined,
+            includePerception,
+            verifyOnDone,
+        });
+
+        let recordingPath: string | undefined;
+        if (out.ok && executor instanceof RecordingDesktopOperator) {
+            const workflow = executor.finish(true);
+            recordingPath = await saveRecordedWorkflow(workflow);
+        }
+
+        console.log(
+            JSON.stringify(
+                {
+                    ok: out.ok,
+                    reused: false,
+                    fallback: true,
+                    match: match
+                        ? {
+                            path: match.path,
+                            score: match.score,
+                            details: match.details,
+                            workflowTask: match.workflow.task,
+                            endedAt: match.workflow.endedAt,
+                        }
+                        : null,
+                    recordingPath,
+                    result: out,
+                },
+                null,
+                2
+            )
+        );
         return;
     }
 
