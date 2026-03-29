@@ -102,15 +102,5 @@ function adaptActionForCurrentScreen(
     screenWidth: number | null,
     screenHeight: number | null
 ): DesktopAction {
-    if ((action.type === 'click' || action.type === 'moveMouse') && step.pointer?.normalized) {
-        if (typeof screenWidth === 'number' && screenWidth > 0 && typeof screenHeight === 'number' && screenHeight > 0) {
-            const x = Math.round(step.pointer.normalized.x * screenWidth);
-            const y = Math.round(step.pointer.normalized.y * screenHeight);
-
-            if (action.type === 'moveMouse') return { ...action, x, y };
-            return { ...action, x, y };
-        }
-    }
-
     return action;
 }

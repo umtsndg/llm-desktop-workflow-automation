@@ -31,35 +31,6 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
         if (!isString(type)) throw new Error('Action.type must be a string');
 
         switch (type) {
-            case 'moveMouse':
-                if (isNumber(action.x) || isNumber(action.y)) {
-                    if (!isNumber(action.x) || !isNumber(action.y)) throw new Error('moveMouse requires both x and y when using absolute coordinates');
-                } else if (isNumber((action as any).nx) || isNumber((action as any).ny)) {
-                    const nx = (action as any).nx;
-                    const ny = (action as any).ny;
-                    if (!isNumber(nx) || !isNumber(ny)) throw new Error('moveMouse requires both nx and ny when using normalized coordinates');
-                    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) throw new Error('moveMouse nx,ny must be between 0 and 1');
-                } else {
-                    throw new Error('moveMouse requires either absolute x,y or normalized nx,ny coordinates');
-                }
-                break;
-
-            case 'click':
-                if (action.x !== undefined || action.y !== undefined) {
-                    if (!isNumber(action.x) || !isNumber(action.y)) throw new Error('click requires both x and y when using absolute coordinates');
-                }
-                if ((action as any).nx !== undefined || (action as any).ny !== undefined) {
-                    const nx = (action as any).nx;
-                    const ny = (action as any).ny;
-                    if (!isNumber(nx) || !isNumber(ny)) throw new Error('click requires both nx and ny when using normalized coordinates');
-                    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) throw new Error('click nx,ny must be between 0 and 1');
-                }
-                if (action.button !== undefined && !['left', 'right', 'middle'].includes(String(action.button))) {
-                    throw new Error('click.button must be left|right|middle');
-                }
-                if (action.double !== undefined && typeof action.double !== 'boolean') throw new Error('click.double must be boolean');
-                break;
-
             case 'typeText':
                 if (!isString(action.text)) throw new Error('typeText requires text string');
                 if (action.delayMs !== undefined && !isNumber(action.delayMs)) throw new Error('typeText.delayMs must be number');
@@ -99,7 +70,27 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
                 if (!isString(action.command)) throw new Error('launchApp requires command string');
                 if (action.args !== undefined && !Array.isArray(action.args)) throw new Error('launchApp.args must be string[]');
                 if (Array.isArray(action.args) && !action.args.every(isString)) throw new Error('launchApp.args must be string[]');
+                if (action.mode !== undefined) {
+                    const allowedModes = ['shell', 'search'];
+                    if (!allowedModes.includes(String(action.mode))) {
+                        throw new Error('launchApp.mode must be shell|search when provided');
+                    }
+                }
                 break;
+
+            case 'click': {
+                if (action.button !== undefined && !['left', 'right', 'middle'].includes(String(action.button))) {
+                    throw new Error('click.button must be left|right|middle when provided');
+                }
+
+                const hasAbs = isNumber(action.x) && isNumber(action.y);
+                const hasNorm = isNumber(action.nx) && isNumber(action.ny);
+
+                if (!hasAbs && !hasNorm) {
+                    throw new Error('click requires either (x,y) absolute coordinates or (nx,ny) normalized coordinates');
+                }
+                break;
+            }
 
             case 'uiClick': {
                 if (!isString(action.windowTitle) || !action.windowTitle.trim()) {
@@ -108,11 +99,8 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
                 if (!isString(action.controlName) || !action.controlName.trim()) {
                     throw new Error('uiClick requires non-empty controlName string');
                 }
-                if (action.controlType !== undefined) {
-                    const allowed = ['Button', 'MenuItem', 'Edit'];
-                    if (!allowed.includes(String(action.controlType))) {
-                        throw new Error('uiClick.controlType must be Button|MenuItem|Edit when provided');
-                    }
+                if (action.wantToText !== undefined && !isBoolean(action.wantToText)) {
+                    throw new Error('uiClick.wantToText must be boolean when provided');
                 }
                 break;
             }

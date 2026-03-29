@@ -275,13 +275,9 @@ async function main() {
 
         const agent = new IterativeDesktopAgent(llm);
         const maxIterations = typeof flags.maxIterations === 'string' ? Number(flags.maxIterations) : undefined;
-        const includePerception = flags.perception === false ? false : true;
-        const verifyOnDone = flags.verify === false ? false : true;
 
         const out = await agent.run(task, executor, {
             maxIterations: Number.isFinite(maxIterations as number) ? (maxIterations as number) : undefined,
-            includePerception,
-            verifyOnDone,
         });
 
         let recordingPath: string | undefined;
@@ -352,13 +348,9 @@ async function main() {
 
         const agent = new IterativeDesktopAgent(llm);
         const maxIterations = typeof flags.maxIterations === 'string' ? Number(flags.maxIterations) : undefined;
-        const includePerception = flags.perception === false ? false : true;
-        const verifyOnDone = flags.verify === false ? false : true;
 
         const out = await agent.run(task, executor, {
             maxIterations: Number.isFinite(maxIterations as number) ? (maxIterations as number) : undefined,
-            includePerception,
-            verifyOnDone,
         });
 
         let recordingPath: string | undefined;

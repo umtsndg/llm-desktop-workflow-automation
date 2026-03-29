@@ -59,7 +59,7 @@ export const KEY_MAP: Record<string, Key> = {
     ctrl: Key.LeftControl,
     alt: Key.LeftAlt,
     shift: Key.LeftShift,
-    meta: Key.LeftWin,
+    windowskey: Key.LeftWin,
 };
 
 export function resolveKey(name: string): Key {

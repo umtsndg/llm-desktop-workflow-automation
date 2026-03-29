@@ -22,7 +22,8 @@ export class OpenAIChatClient implements LLMChatClient {
     constructor(options?: Partial<OpenAIChatClientOptions>) {
         this.apiKey = options?.apiKey ?? requiredEnv('OPENAI_API_KEY');
         this.baseUrl = (options?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com').replace(/\/$/, '');
-        this.model = options?.model ?? (process.env.OPENAI_MODEL ?? 'gpt-4o-mini');
+        // Default to GPT 5.1 unless overridden via options or OPENAI_MODEL.
+        this.model = options?.model ?? (process.env.OPENAI_MODEL ?? 'gpt-5.1');
         this.temperature = options?.temperature ?? 0.2;
     }
 
@@ -42,7 +43,6 @@ export class OpenAIChatClient implements LLMChatClient {
                         model: this.model,
                         temperature: this.temperature,
                         messages,
-                        response_format: { type: 'json_object' },
                     }),
                 });
 

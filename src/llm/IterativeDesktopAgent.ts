@@ -32,7 +32,7 @@ export class IterativeDesktopAgent {
         const maxIterations = options?.maxIterations ?? 20;
         const maxPlanRetries = options?.maxPlanRetries ?? 2;
         const postActionDelayMs = options?.postActionDelayMs ?? 5000;
-        const maxHistoryMessages = options?.maxHistoryMessages ?? 10;
+        const maxHistoryMessages = options?.maxHistoryMessages ?? 30;
 
         const conversation: LLMMessage[] = [
             { role: 'system', content: buildLoopSystemPrompt(task) },
@@ -42,6 +42,7 @@ export class IterativeDesktopAgent {
         const iterations: IterationLog[] = [];
         let lastMessage = 'Not started';
         let memory = 'None yet.';
+        let lastExecutedAction: DesktopAction | undefined;
 
         for (let i = 1; i <= maxIterations; i++) {
             const perceptionBefore = await getDesktopPerception().catch(() => null);
@@ -71,17 +72,53 @@ export class IterativeDesktopAgent {
                 maxHistoryMessages,
             });
 
+            if (plan.thought) {
+                try {
+                    console.error(`[LLM] Thought (iteration ${i}): ${plan.thought}`);
+                } catch {
+                    // ignore logging issues
+                }
+            }
+
+            // After seeing the plan for iteration i, log the last successfully
+            // executed action from the previous iteration (if any).
+            try {
+                if (lastExecutedAction) {
+                    console.error(`[AGENT] Last action before iteration ${i}: ${JSON.stringify(lastExecutedAction)}`);
+                }
+            } catch {
+                // ignore logging issues
+            }
+
             const planActions = plan.actions.slice(0, 1);
             if (planActions.length === 0) {
                 lastMessage = 'No actions returned by planner.';
                 break;
             }
 
-            if (planActions.some((a) => a.type === 'typeText')) {
+            const actionsToExecute: DesktopAction[] = [];
+            const primaryAction = planActions[0]!;
+
+            if (primaryAction.type === 'typeText') {
                 await focusExpectedWindowForEvidence(task, operator);
             }
 
-            const results = await operator.execute(planActions);
+            actionsToExecute.push(...planActions);
+
+            const results = await operator.execute(actionsToExecute);
+
+            // Update lastExecutedAction with the last successful action from this iteration, if any.
+            try {
+                for (let idx = results.length - 1; idx >= 0; idx--) {
+                    const r = results[idx];
+                    if (r && r.ok) {
+                        lastExecutedAction = r.action;
+                        break;
+                    }
+                }
+            } catch {
+                // ignore logging issues
+            }
 
             if (postActionDelayMs > 0) {
                 await delay(postActionDelayMs);
@@ -122,6 +159,14 @@ export class IterativeDesktopAgent {
                 input.screenshotBase64 && input.screenshotWidth && input.screenshotHeight
                     ? ['', `Screen: width=${input.screenshotWidth}, height=${input.screenshotHeight} (pixels)`]
                     : [];
+
+            // Also log the perception to CLI output so the user can
+            // see the same summary that the LLM receives.
+            try {
+                console.error(`[PERCEPTION] Iteration ${input.iteration}:\n${perceptionText}`);
+            } catch {
+                // ignore logging issues
+            }
 
             const promptForLlm = [
                 buildPlanPrompt(input.task),
@@ -169,8 +214,16 @@ export class IterativeDesktopAgent {
 
             const result = await this.llm.chat(messages);
             try {
+                const rawContent = result.content;
+                let thought: string | undefined;
+                if (typeof rawContent === 'string') {
+                    const m = rawContent.match(/^[ \t]*Thought:(.*)$/im);
+                    if (m) thought = m[1].trim();
+                }
+
                 const json = extractFirstJsonObject(result.content);
-                const plan = assertPlanOutput(json);
+                const basePlan = assertPlanOutput(json);
+                const plan: PlanOutput = { ...basePlan, ...(thought ? { thought } : {}) };
 
                 conversation.push({ role: 'user', content: promptForHistory });
                 conversation.push({ role: 'assistant', content: result.content });
@@ -227,22 +280,18 @@ function trimConversation(conversation: LLMMessage[], maxMessages: number): void
 }
 
 function formatPerception(p: DesktopPerception): string {
-    const maxTitles = 12;
     const maxTitleLen = 90;
-    const titles = p.windowTitles
-        .slice(0, maxTitles)
-        .map((t) => (t.length > maxTitleLen ? `${t.slice(0, maxTitleLen - 1)}…` : t));
-
     const active = p.activeWindowTitle
         ? p.activeWindowTitle.length > maxTitleLen
             ? `${p.activeWindowTitle.slice(0, maxTitleLen - 1)}…`
             : p.activeWindowTitle
         : null;
 
+    // Only expose the active window to the LLM (and CLI logs),
+    // not the full list of open windows.
     return [
         `Time: ${p.timestamp}`,
         `Active window: ${active ?? 'unknown'}`,
-        `Open windows (top ${titles.length}): ${titles.join(' | ') || 'none'}`,
     ].join('\n');
 }
 

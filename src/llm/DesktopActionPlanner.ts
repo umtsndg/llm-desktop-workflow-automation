@@ -75,9 +75,8 @@ export class DesktopActionPlanner {
             a.type === 'pressKey' ||
             a.type === 'hotkey' ||
             a.type === 'typeText' ||
-            a.type === 'click' ||
-            a.type === 'scroll' ||
-            a.type === 'moveMouse';
+            a.type === 'uiClick' ||
+            a.type === 'scroll';
 
         const firstInteractiveAfterLaunch = out.findIndex(
             (a, idx) => idx > firstLaunchIndex && isInteractive(a)

@@ -114,22 +114,22 @@ function inferSemantic(action: DesktopAction): string {
             return `Press key: ${action.key}`;
         case 'hotkey':
             return `Hotkey: ${action.keys.join('+')}`;
-        case 'click':
-            return 'Click';
-        case 'moveMouse':
-            return 'Move mouse';
+        case 'uiClick':
+            return `UI click: ${action.controlName}`;
         case 'scroll':
             return `Scroll ${action.direction ?? 'down'} ${action.amount}`;
+        case 'click':
+            return 'Click at coordinates';
         default:
             return action.type;
     }
 }
 
 function extractPointer(action: DesktopAction): { x: number; y: number } | null {
-    if (action.type === 'moveMouse') return { x: action.x, y: action.y };
     if (action.type === 'click' && typeof action.x === 'number' && typeof action.y === 'number') {
         return { x: action.x, y: action.y };
     }
+
     return null;
 }
 

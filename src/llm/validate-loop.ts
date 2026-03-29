@@ -57,6 +57,7 @@ export type VerificationOutput = {
 export type PlanOutput = {
     actions: DesktopAction[];
     toolRequests: ToolRequest[];
+    thought?: string;
 };
 
 export function assertPlanOutput(value: unknown): PlanOutput {

@@ -186,38 +186,6 @@ export class NutJsDesktopOperator implements DesktopOperator {
 
     private async executeOne(action: DesktopAction): Promise<void> {
         switch (action.type) {
-            case 'moveMouse': {
-                const { x, y } = await this.resolveCoordinates(action.x, action.y, (action as any).nx, (action as any).ny);
-                await mouse.move(straightTo(new Point(x, y)));
-                return;
-            }
-
-            case 'click': {
-                if (
-                    typeof action.x === 'number' ||
-                    typeof action.y === 'number' ||
-                    typeof (action as any).nx === 'number' ||
-                    typeof (action as any).ny === 'number'
-                ) {
-                    const { x, y } = await this.resolveCoordinates(
-                        action.x,
-                        action.y,
-                        (action as any).nx,
-                        (action as any).ny
-                    );
-                    await mouse.move(straightTo(new Point(x, y)));
-                }
-
-                const button = buttonMap[action.button ?? 'left'];
-
-                if (action.double) {
-                    await mouse.doubleClick(button);
-                } else {
-                    await mouse.click(button);
-                }
-                return;
-            }
-
             case 'typeText': {
                 await this.releaseModifierKeysBestEffort();
                 await this.typeTextSafe(action.text, action.delayMs);
@@ -301,7 +269,31 @@ export class NutJsDesktopOperator implements DesktopOperator {
                 return;
             }
 
+            case 'click': {
+                const button: MouseButton = (action.button ?? 'left') as MouseButton;
+                const { x, y, nx, ny } = action;
+
+                const coords = await this.resolveCoordinates(x, y, nx, ny);
+
+                await mouse.move(straightTo(new Point(coords.x, coords.y)));
+                await mouse.click(buttonMap[button]);
+                return;
+            }
+
             case 'launchApp': {
+                if (action.mode === 'search') {
+                    // Launch via Windows search: press Windows key, type the app name, then press Enter.
+                    const winKey = resolveKey('windowskey');
+                    await keyboard.pressKey(winKey);
+                    await keyboard.releaseKey(winKey);
+                    await new Promise((resolve) => setTimeout(resolve, 400));
+                    await this.typeTextSafe(action.command);
+                    const enterKey = resolveKey('enter');
+                    await keyboard.pressKey(enterKey);
+                    await keyboard.releaseKey(enterKey);
+                    return;
+                }
+
                 spawn(action.command, action.args ?? [], {
                     detached: true,
                     stdio: 'ignore',
@@ -311,19 +303,15 @@ export class NutJsDesktopOperator implements DesktopOperator {
             }
 
             case 'uiClick': {
-                const { windowTitle, controlName, controlType } = action;
+                const { windowTitle, controlName, wantToText } = action;
 
-                // Special-case: in Outlook, prefer the keyboard shortcut to send mail
-                // instead of relying on UI Automation, which may match the wrong
-                // element when searching for a generic "Send" label.
-                if (windowTitle.toLowerCase().includes('outlook') && controlName.toLowerCase() === 'send') {
-                    await this.executeOne({ type: 'hotkey', keys: ['ctrl', 'enter'] } as any);
-                    return;
+                if (!windowTitle || !controlName) {
+                    throw new Error('uiClick requires windowTitle and controlName');
                 }
 
-                const rect = await this.findUiElementBoundingRect(windowTitle, controlName, controlType);
+                const rect = await this.findUiElementBoundingRect(windowTitle, controlName, wantToText);
                 if (!rect) {
-                    throw new Error(`UI element not found: windowTitle=${windowTitle}, controlName=${controlName}${controlType ? `, controlType=${controlType}` : ''}`);
+                    throw new Error(`UI element not found: windowTitle=${windowTitle}, controlName=${controlName}`);
                 }
 
                 const centerX = Math.round(rect.x + rect.width / 2);
@@ -375,9 +363,9 @@ export class NutJsDesktopOperator implements DesktopOperator {
     private async findUiElementBoundingRect(
         windowTitle: string,
         controlName: string,
-        controlType?: 'Button' | 'MenuItem' | 'Edit'
+        wantToText?: boolean
     ): Promise<{ x: number; y: number; width: number; height: number } | null> {
-        const script = buildUiAutomationScript(windowTitle, controlName, controlType);
+        const script = buildUiAutomationScript(windowTitle, controlName, wantToText === true);
 
         const output = await runPowerShell(script).catch((err) => {
             console.error('[Desktop][UIAutomation] PowerShell error:', err instanceof Error ? err.message : String(err));
@@ -406,14 +394,11 @@ function psStringLiteral(value: string): string {
 function buildUiAutomationScript(
     windowTitle: string,
     controlName: string,
-    controlType?: 'Button' | 'MenuItem' | 'Edit'
+    wantToText?: boolean
 ): string {
     const winTitlePs = psStringLiteral(windowTitle);
     const controlNamePs = psStringLiteral(controlName);
-
-    const controlTypeSnippet = controlType
-        ? `$ctlType = [System.Windows.Automation.ControlType]::${controlType};`
-        : `$ctlType = $null;`;
+    const wantToTextPs = wantToText ? '$true' : '$false';
 
     return `
 Add-Type -AssemblyName UIAutomationClient | Out-Null
@@ -421,6 +406,7 @@ $winTitle = ${winTitlePs}
 $controlName = ${controlNamePs}
 
 $root = [System.Windows.Automation.AutomationElement]::RootElement
+$wantToText = ${wantToTextPs}
 $windows = $root.FindAll(
     [System.Windows.Automation.TreeScope]::Children,
     [System.Windows.Automation.Condition]::TrueCondition
@@ -430,16 +416,18 @@ $window = $null
 foreach ($w in $windows) {
     $name = $w.Current.Name
     if (-not [string]::IsNullOrWhiteSpace($name)) {
-        if ($name -like "*${windowTitle}*") {
+        if ($name -like "*" + $winTitle + "*") {
             $window = $w
             break
         }
     }
 }
 
-if (-not $window) { exit 1 }
-
-${controlTypeSnippet}
+if (-not $window) {
+    # Fallback: if no specific window title match is found, search
+    # from the desktop root instead of failing immediately.
+    $window = $root
+}
 
 $all = $window.FindAll(
     [System.Windows.Automation.TreeScope]::Descendants,
@@ -447,12 +435,51 @@ $all = $window.FindAll(
 )
 
 $elem = $null
+$bestScore = 0
+
 foreach ($e in $all) {
     $n = $e.Current.Name
-    if ([string]::IsNullOrWhiteSpace($n)) { continue }
-    if ($n -notlike "*${controlName}*") { continue }
-    $elem = $e
-    break
+    $h = $e.Current.HelpText
+    $a = $e.Current.AutomationId
+
+    if ([string]::IsNullOrWhiteSpace($n) -and [string]::IsNullOrWhiteSpace($h) -and [string]::IsNullOrWhiteSpace($a)) { continue }
+
+    if ($wantToText -and -not $e.Current.IsTextEditPatternAvailable) { continue }
+
+    $legacyName = $null
+    $legacyHelp = $null
+    try {
+        $legacyPattern = $e.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        if ($legacyPattern) {
+            $legacyName = $legacyPattern.Current.Name
+            $legacyHelp = $legacyPattern.Current.Help
+        }
+    } catch {
+        # ignore
+    }
+
+    $score = 0
+
+    $targets = @($n, $h, $a, $legacyName, $legacyHelp)
+    foreach ($t in $targets) {
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        if ($t -eq $controlName) {
+            if ($score -lt 100) { $score = 100 }
+        } elseif ($t -like "*" + $controlName + "*") {
+            if ($score -lt 60) { $score = 60 }
+        }
+    }
+
+    if ($wantToText -and $e.Current.IsTextEditPatternAvailable) {
+        $score += 30
+    }
+
+    if ($score -le 0) { continue }
+
+    if ($score -gt $bestScore) {
+        $bestScore = $score
+        $elem = $e
+    }
 }
 
 if (-not $elem) { exit 2 }

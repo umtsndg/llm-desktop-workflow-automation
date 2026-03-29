@@ -24,10 +24,6 @@ async function main() {
         { type: 'pressKey', key: 'enter' },
         { type: 'wait', ms: 1000 },
 
-        // click inside worksheet grid
-        { type: 'click', x: 400, y: 350 },
-        { type: 'wait', ms: 800 },
-
         // go to A1
         { type: 'hotkey', keys: ['ctrl', 'home'] },
         { type: 'wait', ms: 500 },

@@ -19,11 +19,6 @@ async function main() {
 
     const run = await agent.run(task, operator, {
         maxIterations: 4,
-        includePerception: true,
-        includeScreenshotInReflection: false,
-        verifyOnDone: true,
-        maxVerifyRetries: 1,
-        maxToolRequestRounds: 2,
     });
 
     console.log('Marker:', marker);
