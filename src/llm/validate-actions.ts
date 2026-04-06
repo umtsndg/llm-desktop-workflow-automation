@@ -99,6 +99,24 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
                 if (!isString(action.controlName) || !action.controlName.trim()) {
                     throw new Error('uiClick requires non-empty controlName string');
                 }
+                if (action.automationId !== undefined && !isString(action.automationId)) {
+                    throw new Error('uiClick.automationId must be string when provided');
+                }
+                if (action.className !== undefined && !isString(action.className)) {
+                    throw new Error('uiClick.className must be string when provided');
+                }
+                if (action.intent !== undefined) {
+                    const allowedIntents = ['Any', 'Text', 'Button', 'ListItem', 'CheckBox', 'ComboBox', 'Tab', 'Window'];
+                    if (!allowedIntents.includes(String(action.intent))) {
+                        throw new Error('uiClick.intent must be one of Any|Text|Button|ListItem|CheckBox|ComboBox|Tab|Window when provided');
+                    }
+                }
+                if (action.allowPartialName !== undefined && !isBoolean(action.allowPartialName)) {
+                    throw new Error('uiClick.allowPartialName must be boolean when provided');
+                }
+                if (action.requireKeyboardFocusable !== undefined && !isBoolean(action.requireKeyboardFocusable)) {
+                    throw new Error('uiClick.requireKeyboardFocusable must be boolean when provided');
+                }
                 if (action.wantToText !== undefined && !isBoolean(action.wantToText)) {
                     throw new Error('uiClick.wantToText must be boolean when provided');
                 }

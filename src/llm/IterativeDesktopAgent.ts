@@ -90,10 +90,12 @@ export class IterativeDesktopAgent {
                 // ignore logging issues
             }
 
+            // If the planner returns no actions, it is explicitly signaling that
+            // the goal appears complete (per prompt contract). Treat as success.
             const planActions = plan.actions.slice(0, 1);
             if (planActions.length === 0) {
-                lastMessage = 'No actions returned by planner.';
-                break;
+                const msg = `Completed after ${i - 1} iteration(s): planner returned no further actions.`;
+                return { ok: true, message: msg, iterations };
             }
 
             const actionsToExecute: DesktopAction[] = [];

@@ -303,21 +303,39 @@ export class NutJsDesktopOperator implements DesktopOperator {
             }
 
             case 'uiClick': {
-                const { windowTitle, controlName, wantToText } = action;
+                const {
+                    windowTitle,
+                    controlName,
+                    automationId,
+                    className,
+                    intent,
+                    allowPartialName,
+                    requireKeyboardFocusable,
+                    wantToText,
+                } = action;
 
                 if (!windowTitle || !controlName) {
                     throw new Error('uiClick requires windowTitle and controlName');
                 }
 
-                const rect = await this.findUiElementBoundingRect(windowTitle, controlName, wantToText);
+                const rect = await this.findUiElementBoundingRect(
+                    windowTitle,
+                    controlName,
+                    wantToText,
+                    automationId,
+                    className,
+                    intent,
+                    allowPartialName,
+                    requireKeyboardFocusable,
+                );
                 if (!rect) {
                     throw new Error(`UI element not found: windowTitle=${windowTitle}, controlName=${controlName}`);
                 }
 
-                const centerX = Math.round(rect.x + rect.width / 2);
-                const centerY = Math.round(rect.y + rect.height / 2);
+                const targetX = typeof rect.clickX === 'number' ? rect.clickX : Math.round(rect.x + rect.width / 2);
+                const targetY = typeof rect.clickY === 'number' ? rect.clickY : Math.round(rect.y + rect.height / 2);
 
-                await mouse.move(straightTo(new Point(centerX, centerY)));
+                await mouse.move(straightTo(new Point(targetX, targetY)));
                 await mouse.click(buttonMap.left);
                 return;
             }
@@ -363,9 +381,23 @@ export class NutJsDesktopOperator implements DesktopOperator {
     private async findUiElementBoundingRect(
         windowTitle: string,
         controlName: string,
-        wantToText?: boolean
-    ): Promise<{ x: number; y: number; width: number; height: number } | null> {
-        const script = buildUiAutomationScript(windowTitle, controlName, wantToText === true);
+        wantToText?: boolean,
+        automationId?: string,
+        className?: string,
+        intent?: 'Any' | 'Text' | 'Button' | 'ListItem' | 'CheckBox' | 'ComboBox' | 'Tab' | 'Window',
+        allowPartialName?: boolean,
+        requireKeyboardFocusable?: boolean,
+    ): Promise<{ x: number; y: number; width: number; height: number; clickX?: number; clickY?: number } | null> {
+        const script = buildUiAutomationScript(
+            windowTitle,
+            controlName,
+            wantToText === true,
+            automationId,
+            className,
+            intent,
+            allowPartialName,
+            requireKeyboardFocusable,
+        );
 
         const output = await runPowerShell(script).catch((err) => {
             console.error('[Desktop][UIAutomation] PowerShell error:', err instanceof Error ? err.message : String(err));
@@ -376,13 +408,25 @@ export class NutJsDesktopOperator implements DesktopOperator {
         if (!line) return null;
 
         const parts = line.split(',').map((p) => Number(p.trim()));
-        if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+        if (parts.length < 4 || parts.some((n) => !Number.isFinite(n))) {
             console.error('[Desktop][UIAutomation] Invalid bounding rect output:', line);
             return null;
         }
 
-        const [x, y, width, height] = parts;
-        return { x, y, width, height };
+        const [x, y, width, height, clickX, clickY] = parts;
+        const result: { x: number; y: number; width: number; height: number; clickX?: number; clickY?: number } = {
+            x,
+            y,
+            width,
+            height,
+        };
+
+        if (Number.isFinite(clickX) && Number.isFinite(clickY)) {
+            result.clickX = clickX;
+            result.clickY = clickY;
+        }
+
+        return result;
     }
 }
 
@@ -394,100 +438,582 @@ function psStringLiteral(value: string): string {
 function buildUiAutomationScript(
     windowTitle: string,
     controlName: string,
-    wantToText?: boolean
+    wantToText?: boolean,
+    automationId?: string,
+    className?: string,
+    intent?: 'Any' | 'Text' | 'Button' | 'ListItem' | 'CheckBox' | 'ComboBox' | 'Tab' | 'Window',
+    allowPartialName?: boolean,
+    requireKeyboardFocusable?: boolean,
 ): string {
     const winTitlePs = psStringLiteral(windowTitle);
     const controlNamePs = psStringLiteral(controlName);
-    const wantToTextPs = wantToText ? '$true' : '$false';
+    const automationIdPs = psStringLiteral(automationId ?? '');
+    const classNamePs = psStringLiteral(className ?? '');
+
+    const effectiveIntent: 'Any' | 'Text' | 'Button' | 'ListItem' | 'CheckBox' | 'ComboBox' | 'Tab' | 'Window' =
+        intent ?? (wantToText ? 'Text' : 'Any');
+    const intentPs = psStringLiteral(effectiveIntent);
+
+    const effectiveAllowPartialName = allowPartialName === false ? false : true;
+    const allowPartialNamePs = effectiveAllowPartialName ? '$true' : '$false';
+
+    const effectiveRequireKeyboardFocusable =
+        typeof requireKeyboardFocusable === 'boolean'
+            ? requireKeyboardFocusable
+            : wantToText === true;
+    const requireKeyboardFocusablePs = effectiveRequireKeyboardFocusable ? '$true' : '$false';
 
     return `
 Add-Type -AssemblyName UIAutomationClient | Out-Null
-$winTitle = ${winTitlePs}
-$controlName = ${controlNamePs}
 
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$wantToText = ${wantToTextPs}
-$windows = $root.FindAll(
-    [System.Windows.Automation.TreeScope]::Children,
-    [System.Windows.Automation.Condition]::TrueCondition
-)
+function Get-UiaSafeCurrentProperty {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element,
 
-$window = $null
-foreach ($w in $windows) {
-    $name = $w.Current.Name
-    if (-not [string]::IsNullOrWhiteSpace($name)) {
-        if ($name -like "*" + $winTitle + "*") {
-            $window = $w
-            break
-        }
+        [Parameter(Mandatory)]
+        [string]$PropertyName
+    )
+
+    try {
+        return $Element.Current.$PropertyName
+    } catch {
+        return $null
     }
 }
 
-if (-not $window) {
-    # Fallback: if no specific window title match is found, search
-    # from the desktop root instead of failing immediately.
-    $window = $root
-}
+function Get-UiaLegacyInfo {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element
+    )
 
-$all = $window.FindAll(
-    [System.Windows.Automation.TreeScope]::Descendants,
-    [System.Windows.Automation.Condition]::TrueCondition
-)
+    $result = @{
+        Name  = $null
+        Help  = $null
+        Value = $null
+        Role  = $null
+    }
 
-$elem = $null
-$bestScore = 0
-
-foreach ($e in $all) {
-    $n = $e.Current.Name
-    $h = $e.Current.HelpText
-    $a = $e.Current.AutomationId
-
-    if ([string]::IsNullOrWhiteSpace($n) -and [string]::IsNullOrWhiteSpace($h) -and [string]::IsNullOrWhiteSpace($a)) { continue }
-
-    if ($wantToText -and -not $e.Current.IsTextEditPatternAvailable) { continue }
-
-    $legacyName = $null
-    $legacyHelp = $null
     try {
-        $legacyPattern = $e.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
-        if ($legacyPattern) {
-            $legacyName = $legacyPattern.Current.Name
-            $legacyHelp = $legacyPattern.Current.Help
+        $pattern = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        if ($pattern) {
+            $result.Name  = $pattern.Current.Name
+            $result.Help  = $pattern.Current.Help
+            $result.Value = $pattern.Current.Value
+            $result.Role  = $pattern.Current.Role
         }
     } catch {
-        # ignore
     }
 
-    $score = 0
+    return $result
+}
 
-    $targets = @($n, $h, $a, $legacyName, $legacyHelp)
-    foreach ($t in $targets) {
-        if ([string]::IsNullOrWhiteSpace($t)) { continue }
-        if ($t -eq $controlName) {
-            if ($score -lt 100) { $score = 100 }
-        } elseif ($t -like "*" + $controlName + "*") {
-            if ($score -lt 60) { $score = 60 }
+function Test-UiaPatternAvailable {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element,
+
+        [Parameter(Mandatory)]
+        [ValidateSet(
+            "Value",
+            "Text",
+            "TextEdit",
+            "Invoke",
+            "SelectionItem",
+            "ExpandCollapse",
+            "LegacyIAccessible",
+            "ScrollItem",
+            "Window"
+        )]
+        [string]$PatternName
+    )
+
+    try {
+        switch ($PatternName) {
+            "Value"             { return [bool]$Element.Current.IsValuePatternAvailable }
+            "Text"              { return [bool]$Element.Current.IsTextPatternAvailable }
+            "TextEdit"          { return [bool]$Element.Current.IsTextEditPatternAvailable }
+            "Invoke"            { return [bool]$Element.Current.IsInvokePatternAvailable }
+            "SelectionItem"     { return [bool]$Element.Current.IsSelectionItemPatternAvailable }
+            "ExpandCollapse"    { return [bool]$Element.Current.IsExpandCollapsePatternAvailable }
+            "LegacyIAccessible" { return [bool]$Element.Current.IsLegacyIAccessiblePatternAvailable }
+            "ScrollItem"        { return [bool]$Element.Current.IsScrollItemPatternAvailable }
+            "Window"            { return [bool]$Element.Current.IsWindowPatternAvailable }
+        }
+    } catch {
+        return $false
+    }
+
+    return $false
+}
+
+function Get-UiaWindowByTitle {
+    param(
+        [string]$WindowTitle
+    )
+
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $windows = $root.FindAll(
+        [System.Windows.Automation.TreeScope]::Children,
+        [System.Windows.Automation.Condition]::TrueCondition
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WindowTitle)) {
+        return $root
+    }
+
+    $normalizedNeedle = $WindowTitle.Trim().ToLowerInvariant()
+
+    $best = $null
+    $bestScore = -1
+
+    foreach ($w in $windows) {
+        $name = Get-UiaSafeCurrentProperty -Element $w -PropertyName "Name"
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+        $candidate = $name.Trim().ToLowerInvariant()
+        $score = 0
+
+        if ($candidate -eq $normalizedNeedle) {
+            $score = 100
+        } elseif ($candidate.Contains($normalizedNeedle)) {
+            $score = 80
+        } elseif ($normalizedNeedle.Contains($candidate) -and $candidate.Length -ge 3) {
+            $score = 40
+        }
+
+        if ($score -gt $bestScore) {
+            $bestScore = $score
+            $best = $w
         }
     }
 
-    if ($wantToText -and $e.Current.IsTextEditPatternAvailable) {
-        $score += 30
+    if ($best) { return $best }
+
+    foreach ($w in $windows) {
+        $name = Get-UiaSafeCurrentProperty -Element $w -PropertyName "Name"
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+
+        if ($name -match 'Outlook|Chrome|Edge|Mail|Firefox|Visual Studio|Notepad|Explorer') {
+            return $w
+        }
     }
 
-    if ($score -le 0) { continue }
+    return $root
+}
 
-    if ($score -gt $bestScore) {
-        $bestScore = $score
-        $elem = $e
+function Get-UiaFrameworkMode {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Window
+    )
+
+    $frameworkId = Get-UiaSafeCurrentProperty -Element $Window -PropertyName "FrameworkId"
+    $className   = Get-UiaSafeCurrentProperty -Element $Window -PropertyName "ClassName"
+    $name        = Get-UiaSafeCurrentProperty -Element $Window -PropertyName "Name"
+
+    $frameworkIdNorm = if ($frameworkId) { $frameworkId.ToString().Trim().ToLowerInvariant() } else { "" }
+    $classNameNorm   = if ($className)   { $className.ToString().Trim().ToLowerInvariant() } else { "" }
+    $nameNorm        = if ($name)        { $name.ToString().Trim().ToLowerInvariant() } else { "" }
+
+    if ($frameworkIdNorm -eq "wpf") {
+        return "WPF"
+    }
+
+    if ($frameworkIdNorm -eq "win32") {
+        return "Win32"
+    }
+
+    if (
+        $frameworkIdNorm -eq "chrome" -or
+        $classNameNorm -match 'chrome|widgetwin|webview|edge' -or
+        $nameNorm -match 'outlook'
+    ) {
+        return "Chrome"
+    }
+
+    return "Generic"
+}
+
+function Get-UiaElementClickablePointOrCenter {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element
+    )
+
+    $rect = $Element.Current.BoundingRectangle
+    if (-not $rect -or $rect.IsEmpty) {
+        return $null
+    }
+
+    try {
+        $pt = $Element.GetClickablePoint()
+        return [pscustomobject]@{
+            X = [int][math]::Round($pt.X)
+            Y = [int][math]::Round($pt.Y)
+        }
+    } catch {
+        return [pscustomobject]@{
+            X = [int][math]::Round($rect.X + ($rect.Width / 2))
+            Y = [int][math]::Round($rect.Y + ($rect.Height / 2))
+        }
     }
 }
 
-if (-not $elem) { exit 2 }
+function Find-UiaElementUnified {
+    [CmdletBinding()]
+    param(
+        [string]$WindowTitle,
+        [string]$ControlName,
+        [string]$AutomationId,
+        [string]$ClassName,
+        [ValidateSet("Any","Text","Button","ListItem","CheckBox","ComboBox","Tab","Window")]
+        [string]$Intent = "Any",
+        [switch]$AllowPartialName,
+        [switch]$RequireKeyboardFocusable
+    )
 
-$rect = $elem.Current.BoundingRectangle
-if (-not $rect) { exit 3 }
+    $window = Get-UiaWindowByTitle -WindowTitle $WindowTitle
+    $mode = Get-UiaFrameworkMode -Window $window
 
-"$($rect.X),$($rect.Y),$($rect.Width),$($rect.Height)"
+    $conditions = New-Object 'System.Collections.Generic.List[System.Windows.Automation.Condition]'
+
+    if (-not [string]::IsNullOrWhiteSpace($ControlName)) {
+        $conditions.Add(
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty,
+                $ControlName
+            ))
+        )
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($AutomationId)) {
+        $conditions.Add(
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+                $AutomationId
+            ))
+        )
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ClassName)) {
+        $conditions.Add(
+            (New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ClassNameProperty,
+                $ClassName
+            ))
+        )
+    }
+
+    $searchCondition = $null
+    if ($conditions.Count -eq 0) {
+        $searchCondition = [System.Windows.Automation.Condition]::TrueCondition
+    } elseif ($conditions.Count -eq 1) {
+        $searchCondition = $conditions[0]
+    } else {
+        $searchCondition = New-Object System.Windows.Automation.AndCondition($conditions.ToArray())
+    }
+
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+
+    $candidates = $window.FindAll($scope, $searchCondition)
+
+    if ($candidates.Count -eq 0 -and $AllowPartialName.IsPresent -and -not [string]::IsNullOrWhiteSpace($ControlName)) {
+        $candidates = $window.FindAll(
+            $scope,
+            [System.Windows.Automation.Condition]::TrueCondition
+        )
+    }
+
+    $best = $null
+    $bestScore = -999999
+
+    foreach ($e in $candidates) {
+        $name         = Get-UiaSafeCurrentProperty -Element $e -PropertyName "Name"
+        $helpText     = Get-UiaSafeCurrentProperty -Element $e -PropertyName "HelpText"
+        $autoId       = Get-UiaSafeCurrentProperty -Element $e -PropertyName "AutomationId"
+        $class        = Get-UiaSafeCurrentProperty -Element $e -PropertyName "ClassName"
+        $frameworkId  = Get-UiaSafeCurrentProperty -Element $e -PropertyName "FrameworkId"
+        $controlType  = Get-UiaSafeCurrentProperty -Element $e -PropertyName "ControlType"
+        $enabled      = Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsEnabled"
+        $offscreen    = Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsOffscreen"
+        $focusable    = Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsKeyboardFocusable"
+        $hasFocus     = Get-UiaSafeCurrentProperty -Element $e -PropertyName "HasKeyboardFocus"
+
+        $legacy       = Get-UiaLegacyInfo -Element $e
+        $hasValue     = Test-UiaPatternAvailable -Element $e -PatternName "Value"
+        $hasText      = Test-UiaPatternAvailable -Element $e -PatternName "Text"
+        $hasTextEdit  = Test-UiaPatternAvailable -Element $e -PatternName "TextEdit"
+        $hasInvoke    = Test-UiaPatternAvailable -Element $e -PatternName "Invoke"
+        $hasExpand    = Test-UiaPatternAvailable -Element $e -PatternName "ExpandCollapse"
+        $hasSelect    = Test-UiaPatternAvailable -Element $e -PatternName "SelectionItem"
+
+        if ($RequireKeyboardFocusable.IsPresent -and -not $focusable) {
+            continue
+        }
+
+        if ($offscreen -eq $true) {
+            continue
+        }
+
+        $score = 0
+        $fields = @($name, $helpText, $autoId, $class, $legacy.Name, $legacy.Help)
+
+        if (-not [string]::IsNullOrWhiteSpace($ControlName)) {
+            foreach ($f in $fields) {
+                if ([string]::IsNullOrWhiteSpace($f)) { continue }
+
+                if ($f -eq $ControlName) {
+                    $score += 200
+                } elseif ($AllowPartialName.IsPresent -and $f -like "*$ControlName*") {
+                    $score += 80
+                }
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($AutomationId) -and $autoId -eq $AutomationId) {
+            $score += 180
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($ClassName) -and $class -eq $ClassName) {
+            $score += 120
+        }
+
+        if ($enabled)   { $score += 15 }
+        if ($focusable) { $score += 20 }
+        if ($hasFocus)  { $score += 10 }
+
+        $rejectCandidate = $false
+
+        switch ($Intent) {
+            "Text" {
+                $isChromeEditableGroup =
+                    $mode -eq "Chrome" -and
+                    $controlType -eq [System.Windows.Automation.ControlType]::Group -and
+                    ($hasTextEdit -or $hasText)
+
+                $isEditLike =
+                    $hasValue -or
+                    $hasText -or
+                    $hasTextEdit -or
+                    $controlType -eq [System.Windows.Automation.ControlType]::Edit -or
+                    $controlType -eq [System.Windows.Automation.ControlType]::Document -or
+                    $isChromeEditableGroup
+
+                if (-not $isEditLike) {
+                    $rejectCandidate = $true
+                    break
+                }
+
+                # 🚫 Reject buttons explicitly
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Button) {
+                    $rejectCandidate = $true
+                    break
+                }
+
+                # 🚫 Reject invoke-only elements (buttons/links)
+                if ($hasInvoke -and -not $hasTextEdit -and -not $hasValue -and -not $hasText) {
+                    $rejectCandidate = $true
+                    break
+                }
+
+                # ✅ Positive scoring
+                if ($hasValue)    { $score += 80 }
+                if ($hasText)     { $score += 80 }
+                if ($hasTextEdit) { $score += 140 }
+
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Edit) {
+                    $score += 140
+                }
+
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Document) {
+                    $score += 80
+                }
+
+                if ($isChromeEditableGroup) {
+                    $score += 180
+                }
+
+                if ($hasFocus) {
+                    $score += 40
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($class) -and $class -match 'EditorClass') {
+                    $score += 80
+                }
+
+                break
+            }
+
+            "Button" {
+                if ($hasInvoke) { $score += 80 }
+
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Button) {
+                    $score += 140
+                }
+
+                if ($mode -eq "Chrome" -and $controlType -eq [System.Windows.Automation.ControlType]::Hyperlink) {
+                    $score += 40
+                }
+
+                break
+            }
+
+            "ListItem" {
+                if ($hasSelect) { $score += 70 }
+
+                if ($controlType -eq [System.Windows.Automation.ControlType]::ListItem) {
+                    $score += 130
+                }
+
+                break
+            }
+
+            "CheckBox" {
+                if ($controlType -eq [System.Windows.Automation.ControlType]::CheckBox) {
+                    $score += 150
+                }
+
+                break
+            }
+
+            "ComboBox" {
+                if ($hasExpand) { $score += 50 }
+
+                if ($controlType -eq [System.Windows.Automation.ControlType]::ComboBox) {
+                    $score += 150
+                }
+
+                break
+            }
+
+            "Tab" {
+                if ($controlType -eq [System.Windows.Automation.ControlType]::TabItem) {
+                    $score += 150
+                }
+
+                break
+            }
+
+            "Window" {
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Window) {
+                    $score += 150
+                }
+
+                break
+            }
+
+            "Any" {
+                if ($hasInvoke)    { $score += 10 }
+                if ($hasValue)     { $score += 10 }
+                if ($hasTextEdit)  { $score += 10 }
+                if ($hasSelect)    { $score += 10 }
+
+                break
+            }
+        }
+
+        # 🔥 CRITICAL LINE — THIS IS WHAT WAS MISSING
+        if ($rejectCandidate) {
+            continue
+        }
+
+        switch ($mode) {
+            "Win32" {
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Edit -and $Intent -eq "Text") {
+                    $score += 40
+                }
+                if (-not [string]::IsNullOrWhiteSpace($autoId)) {
+                    $score += 20
+                }
+            }
+
+            "WPF" {
+                if (-not [string]::IsNullOrWhiteSpace($autoId)) {
+                    $score += 30
+                }
+                if ($controlType -eq [System.Windows.Automation.ControlType]::Edit -and $Intent -eq "Text") {
+                    $score += 30
+                }
+            }
+
+            "Chrome" {
+                if (($frameworkId -eq "Chrome") -or ($class -match 'Editor|Chrome|Widget')) {
+                    $score += 30
+                }
+
+                if ($Intent -eq "Text") {
+                    if ($controlType -eq [System.Windows.Automation.ControlType]::Group -and $hasTextEdit) {
+                        $score += 70
+                    }
+                    if ($legacy.Name -eq $ControlName) {
+                        $score += 35
+                    }
+                }
+            }
+        }
+
+        $rect = $null
+        try { $rect = $e.Current.BoundingRectangle } catch {}
+        if ($rect -and -not $rect.IsEmpty) {
+            if ($rect.Width -gt 1 -and $rect.Height -gt 1) {
+                $score += 10
+            }
+        } else {
+            $score -= 50
+        }
+
+        if ($score -gt $bestScore) {
+            $bestScore = $score
+            $best = $e
+        }
+    }
+
+    if (-not $best) {
+        return $null
+    }
+
+    $rect = $best.Current.BoundingRectangle
+    if (-not $rect -or $rect.IsEmpty) {
+        return $null
+    }
+
+    $pt = Get-UiaElementClickablePointOrCenter -Element $best
+
+    return [pscustomobject]@{
+        WindowName         = Get-UiaSafeCurrentProperty -Element $window -PropertyName "Name"
+        Mode               = $mode
+        Name               = Get-UiaSafeCurrentProperty -Element $best -PropertyName "Name"
+        AutomationId       = Get-UiaSafeCurrentProperty -Element $best -PropertyName "AutomationId"
+        ClassName          = Get-UiaSafeCurrentProperty -Element $best -PropertyName "ClassName"
+        FrameworkId        = Get-UiaSafeCurrentProperty -Element $best -PropertyName "FrameworkId"
+        ControlType        = (Get-UiaSafeCurrentProperty -Element $best -PropertyName "ControlType").ProgrammaticName
+        IsEnabled          = Get-UiaSafeCurrentProperty -Element $best -PropertyName "IsEnabled"
+        IsKeyboardFocusable= Get-UiaSafeCurrentProperty -Element $best -PropertyName "IsKeyboardFocusable"
+        X                  = [int][math]::Round($rect.X)
+        Y                  = [int][math]::Round($rect.Y)
+        Width              = [int][math]::Round($rect.Width)
+        Height             = [int][math]::Round($rect.Height)
+        ClickX             = $pt.X
+        ClickY             = $pt.Y
+        Score              = $bestScore
+    }
+}
+
+$winTitle = ${winTitlePs}
+$controlName = ${controlNamePs}
+$automationId = ${automationIdPs}
+$className = ${classNamePs}
+$intent = ${intentPs}
+$allowPartialName = ${allowPartialNamePs}
+$requireKeyboardFocusable = ${requireKeyboardFocusablePs}
+
+$found = Find-UiaElementUnified -WindowTitle $winTitle -ControlName $controlName -AutomationId $automationId -ClassName $className -Intent $intent -AllowPartialName:$allowPartialName -RequireKeyboardFocusable:$requireKeyboardFocusable
+
+if (-not $found) { exit 2 }
+
+"$($found.X),$($found.Y),$($found.Width),$($found.Height),$($found.ClickX),$($found.ClickY)"
 `.trim();
 }
 

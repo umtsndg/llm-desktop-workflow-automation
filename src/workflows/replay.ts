@@ -102,5 +102,51 @@ function adaptActionForCurrentScreen(
     screenWidth: number | null,
     screenHeight: number | null
 ): DesktopAction {
+    // Only coordinate-based clicks need adaptation.
+    if (action.type !== 'click') return action;
+
+    // If we don't know the current screen size, we can't safely normalize.
+    if (typeof screenWidth !== 'number' || typeof screenHeight !== 'number' || screenWidth <= 0 || screenHeight <= 0) {
+        return action;
+    }
+
+    const clamp01 = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);
+
+    const normalized = step.pointer?.normalized;
+    if (normalized && typeof normalized.x === 'number' && typeof normalized.y === 'number') {
+        // Prefer recorded normalized coordinates (0..1). NutJsDesktopOperator
+        // will resolve these to absolute pixels using the current screen size.
+        return {
+            ...action,
+            x: undefined,
+            y: undefined,
+            nx: clamp01(normalized.x),
+            ny: clamp01(normalized.y),
+        };
+    }
+
+    const raw = step.pointer?.raw;
+    const ref = step.pointer?.reference;
+    if (
+        raw &&
+        typeof raw.x === 'number' &&
+        typeof raw.y === 'number' &&
+        ref &&
+        typeof ref.screenWidth === 'number' &&
+        typeof ref.screenHeight === 'number' &&
+        ref.screenWidth > 0 &&
+        ref.screenHeight > 0
+    ) {
+        // Fallback: compute normalized coords from record-time raw pixels and
+        // record-time screen reference.
+        return {
+            ...action,
+            x: undefined,
+            y: undefined,
+            nx: clamp01(raw.x / ref.screenWidth),
+            ny: clamp01(raw.y / ref.screenHeight),
+        };
+    }
+
     return action;
 }

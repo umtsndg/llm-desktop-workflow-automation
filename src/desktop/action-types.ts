@@ -22,6 +22,16 @@ export type DesktopAction =
         windowTitle: string;
         /** Exact control name as exposed by UI Automation (e.g. button or menu item name). */
         controlName: string;
+        /** Optional UI Automation AutomationId for the control, if known. */
+        automationId?: string;
+        /** Optional ClassName filter for the control, if known. */
+        className?: string;
+        /** Finder intent hint; controls scoring and pattern preferences. Defaults to "Text" when wantToText=true, otherwise "Any". */
+        intent?: 'Any' | 'Text' | 'Button' | 'ListItem' | 'CheckBox' | 'ComboBox' | 'Tab' | 'Window';
+        /** Allow partial name matches when ControlName is provided. Defaults to true. */
+        allowPartialName?: boolean;
+        /** If true, restrict to keyboard-focusable elements. Defaults to true when wantToText=true, otherwise false. */
+        requireKeyboardFocusable?: boolean;
         /** If true, this click is intended to focus a text-editable area; the target UI element must have IsTextEditPatternAvailable = true. */
         wantToText?: boolean;
     } & ActionHint);
