@@ -37,7 +37,7 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
         switch (type) {
             case 'typeText':
                 if (!isString(action.text)) throw new Error('typeText requires text string');
-                if (action.delayMs !== undefined && !isNumber(action.delayMs)) throw new Error('typeText.delayMs must be number');
+                if (action.delayMs !== undefined) throw new Error('typeText.delayMs is not supported; typing speed is controlled globally');
                 break;
 
             case 'pressKey':

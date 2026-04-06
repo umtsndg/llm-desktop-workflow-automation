@@ -7,7 +7,7 @@ type ActionHint = {
 };
 
 export type DesktopAction =
-    | ({ type: 'typeText'; text: string; delayMs?: number } & ActionHint)
+    | ({ type: 'typeText'; text: string } & ActionHint)
     | ({ type: 'pressKey'; key: string } & ActionHint)
     | ({ type: 'releaseKey'; key: string } & ActionHint)
     | ({ type: 'hotkey'; keys: string[] } & ActionHint)

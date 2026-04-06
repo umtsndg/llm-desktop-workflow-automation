@@ -14,7 +14,7 @@ export function buildLoopSystemPrompt(task?: string): string {
         'Line 2: a single JSON object of the form {"actions": [DesktopAction] }  // a one-element or empty array',
         '',
         'DesktopAction variants:',
-        '- {"type":"typeText","text":string,"delayMs"?:number}',
+        '- {"type":"typeText","text":string}',
         '- {"type":"pressKey","key":string}',
         '- {"type":"releaseKey","key":string}',
         '- {"type":"hotkey","keys":string[]}',

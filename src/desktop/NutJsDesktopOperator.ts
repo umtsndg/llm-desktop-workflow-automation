@@ -65,7 +65,7 @@ export class NutJsDesktopOperator implements DesktopOperator {
 
     constructor() {
         mouse.config.autoDelayMs = 150;
-        keyboard.config.autoDelayMs = 80;
+        keyboard.config.autoDelayMs = 200;
     }
 
     private async releaseModifierKeysBestEffort(): Promise<void> {
@@ -281,7 +281,7 @@ export class NutJsDesktopOperator implements DesktopOperator {
 
             case 'typeText': {
                 await this.releaseModifierKeysBestEffort();
-                await this.typeTextSafe(action.text, action.delayMs);
+                await this.typeTextSafe(action.text);
                 await this.releaseModifierKeysBestEffort();
                 return;
             }
@@ -451,19 +451,15 @@ export class NutJsDesktopOperator implements DesktopOperator {
         }
     }
 
-    private async typeTextSafe(text: string, delayMs?: number): Promise<void> {
-        const originalDelay = keyboard.config.autoDelayMs;
-        if (typeof delayMs === 'number') {
-            keyboard.config.autoDelayMs = delayMs;
-        }
-
+    private async typeTextSafe(text: string): Promise<void> {
         // If we encounter a character we don't know how to map safely,
-        // fall back to the library's generic typing for the entire string.
-        for (const ch of text) {
+        // fall back to the library's generic typing for the remaining substring.
+        // (Do NOT type the entire string, otherwise we duplicate the already-typed prefix.)
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i] ?? '';
             const mapping = SIMPLE_CHAR_KEY_MAP[ch];
             if (!mapping) {
-                await keyboard.type(text);
-                keyboard.config.autoDelayMs = originalDelay;
+                await keyboard.type(text.slice(i));
                 return;
             }
 
@@ -478,8 +474,6 @@ export class NutJsDesktopOperator implements DesktopOperator {
                 await keyboard.releaseKey(Key.LeftShift).catch(() => undefined);
             }
         }
-
-        keyboard.config.autoDelayMs = originalDelay;
     }
 
     private async findUiElementBoundingRect(
