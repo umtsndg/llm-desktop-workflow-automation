@@ -15,7 +15,9 @@ export type DesktopAction =
     | ({ type: 'wait'; ms: number } & ActionHint)
     | ({ type: 'scroll'; amount: number; direction?: 'up' | 'down' } & ActionHint)
     | ({ type: 'launchApp'; command: string; args?: string[]; mode?: 'shell' | 'search' } & ActionHint)
+    | ({ type: 'findCandidates'; query: string; limit?: number } & ActionHint)
     | ({ type: 'click'; button?: MouseButton; x?: number; y?: number; nx?: number; ny?: number; } & ActionHint)
+    | ({ type: 'clickCandidate'; id: number; button?: MouseButton } & ActionHint)
     | ({
         type: 'uiClick';
         /** Window title or substring used to identify the top-level window, e.g. "Notepad", "Outlook", "Word". */

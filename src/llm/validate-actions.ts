@@ -8,6 +8,10 @@ function isNumber(value: unknown): value is number {
     return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isInteger(value: unknown): value is number {
+    return isNumber(value) && Number.isInteger(value);
+}
+
 function isString(value: unknown): value is string {
     return typeof value === 'string';
 }
@@ -78,49 +82,32 @@ export function assertDesktopActions(value: unknown): DesktopAction[] {
                 }
                 break;
 
-            case 'click': {
-                if (action.button !== undefined && !['left', 'right', 'middle'].includes(String(action.button))) {
-                    throw new Error('click.button must be left|right|middle when provided');
+            case 'findCandidates': {
+                if (!isString(action.query) || !action.query.trim()) {
+                    throw new Error('findCandidates requires non-empty query string');
                 }
+                if (action.limit !== undefined && !isNumber(action.limit)) {
+                    throw new Error('findCandidates.limit must be number when provided');
+                }
+                break;
+            }
 
-                const hasAbs = isNumber(action.x) && isNumber(action.y);
-                const hasNorm = isNumber(action.nx) && isNumber(action.ny);
+            case 'click': {
+                throw new Error('Unsupported action type: click. Use findCandidates + clickCandidate instead.');
+            }
 
-                if (!hasAbs && !hasNorm) {
-                    throw new Error('click requires either (x,y) absolute coordinates or (nx,ny) normalized coordinates');
+            case 'clickCandidate': {
+                if (action.button !== undefined && !['left', 'right', 'middle'].includes(String(action.button))) {
+                    throw new Error('clickCandidate.button must be left|right|middle when provided');
+                }
+                if (!isInteger(action.id) || action.id < 0) {
+                    throw new Error('clickCandidate.id must be a non-negative integer');
                 }
                 break;
             }
 
             case 'uiClick': {
-                if (!isString(action.windowTitle) || !action.windowTitle.trim()) {
-                    throw new Error('uiClick requires non-empty windowTitle string');
-                }
-                if (!isString(action.controlName) || !action.controlName.trim()) {
-                    throw new Error('uiClick requires non-empty controlName string');
-                }
-                if (action.automationId !== undefined && !isString(action.automationId)) {
-                    throw new Error('uiClick.automationId must be string when provided');
-                }
-                if (action.className !== undefined && !isString(action.className)) {
-                    throw new Error('uiClick.className must be string when provided');
-                }
-                if (action.intent !== undefined) {
-                    const allowedIntents = ['Any', 'Text', 'Button', 'ListItem', 'CheckBox', 'ComboBox', 'Tab', 'Window'];
-                    if (!allowedIntents.includes(String(action.intent))) {
-                        throw new Error('uiClick.intent must be one of Any|Text|Button|ListItem|CheckBox|ComboBox|Tab|Window when provided');
-                    }
-                }
-                if (action.allowPartialName !== undefined && !isBoolean(action.allowPartialName)) {
-                    throw new Error('uiClick.allowPartialName must be boolean when provided');
-                }
-                if (action.requireKeyboardFocusable !== undefined && !isBoolean(action.requireKeyboardFocusable)) {
-                    throw new Error('uiClick.requireKeyboardFocusable must be boolean when provided');
-                }
-                if (action.wantToText !== undefined && !isBoolean(action.wantToText)) {
-                    throw new Error('uiClick.wantToText must be boolean when provided');
-                }
-                break;
+                throw new Error('Unsupported action type: uiClick. Use findCandidates + clickCandidate instead.');
             }
 
             default:

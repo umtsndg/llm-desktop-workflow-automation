@@ -22,22 +22,20 @@ export function buildLoopSystemPrompt(task?: string): string {
         '- {"type":"wait","ms":number}',
         '- {"type":"scroll","amount":number,"direction"?:"up"|"down"}',
         '- {"type":"launchApp","command":string,"mode":"search"}',
-        '- {"type":"click","button"?:"left"|"right"|"middle","x"?:number,"y"?:number,"nx"?:number,"ny"?:number}',
-        '- {"type":"uiClick","windowTitle":string,"controlName":string,"automationId"?:string,"className"?:string,"intent"?:"Any"|"Text"|"Button"|"ListItem"|"CheckBox"|"ComboBox"|"Tab"|"Window","allowPartialName"?:boolean,"requireKeyboardFocusable"?:boolean,"wantToText"?:boolean}',
+        '- {"type":"findCandidates","query":string,"limit"?:number}  // request a filtered candidate list by query (case-insensitive substring match); next iteration will include the filtered candidates',
+        '- {"type":"clickCandidate","id":number,"button"?:"left"|"right"|"middle"}  // click a candidate element by id (preferred when candidates are provided)',
         '',
         'Any DesktopAction may include an optional "hint" string for intent; the executor ignores it.',
         `Supported key names for pressKey/releaseKey/hotkey: ${keys}`,
         '',
         'General rules:',
-        '- Prefer uiClick with windowTitle+controlName for clicking. Use coordinate-based click ONLY when the user explicitly asks for coordinates or when you have strong evidence that uiClick cannot reliably target the needed control.',
-        '- When choosing uiClick.windowTitle, prefer a short, stable app name (for example "Outlook", "Notepad", "Excel") instead of the full dynamic window caption. If perception shows window titles that contain both an app name and extra context (such as a document name or email subject), use just the app name (for example use "Outlook" rather than the full caption).',
-        '- For uiClick.allowPartialName, you should ALMOST ALWAYS allow partial matches. The executor defaults allowPartialName to true when it is omitted, so normally either omit this field or set "allowPartialName":true explicitly; only set it to false when you really need an exact match for a very ambiguous label.',
-        '- When you know stable UI Automation identifiers (from prior runs, documentation, or hints), include them in uiClick: use automationId/className and set intent (e.g. "Text" for editable fields, "Button" for clickable buttons). If you are unsure, omit them and rely on windowTitle+controlName and defaults.',
-        '- Use the screenshot to decide which control to target and to read its label, and use the EXACT visible text (including non-English/localized labels and accents) as controlName. Do NOT translate, anglicize, or guess labels if the UI text on screen is different; copy what you actually see.',
+        '- The ONLY allowed way to click is clickCandidate (by id). Do NOT output click or uiClick at all.',
+        '- If you are not provided a list of UI candidates ("Candidate N: ..."), use findCandidates to request candidates by query, then on the next iteration use clickCandidate.',
+        '- If you do not see the element you need in the current candidate list, use findCandidates with a query like "To", "Subject", "Send", "Search", etc. Then on the next iteration pick from the filtered candidates using clickCandidate.',
         '- Treat the "Active window" line in perception as ground truth. Your Thought must not contradict it: if it says the active window is cmd.exe, do NOT say "Outlook is currently active" even if Outlook appears in the open windows list; instead, say Outlook is open but not active and first bring it to the foreground.',
         '- Never claim that a specific app window is visible or in the foreground unless the active window title and screenshot clearly show it. If Outlook (or any other app) is minimized or hidden behind other windows, explicitly note that and first bring it to the foreground (for example with focusWindow or launchApp) before trying to click any of its controls.',
         '- To launch apps ("open Outlook", "open Excel"), ALWAYS use a single launchApp action in search mode, e.g. {"type":"launchApp","command":"Settings","mode":"search"}.',
-        '- BEFORE ANY typeText action, first plan a uiClick on the appropriate text field (editor, address bar, To/Subject/body, etc.) so the caret is placed correctly, unless you already did that uiClick in the immediately previous step. Never type into an unfocused or wrong field. When that uiClick is explicitly to focus a text-editable area, set "wantToText":true so that only controls with IsTextEditPatternAvailable=true are eligible.',
+        '- BEFORE ANY typeText action, always focus the correct input field first using clickCandidate. Never type into an unfocused or wrong field.',
         '- If the last action failed or had no visible effect, choose a different action or parameters instead of repeating it unchanged.',
         ...(appSnippets.length > 0
             ? ['', 'App-specific tips (only if relevant to the goal):', ...appSnippets]
@@ -66,13 +64,13 @@ function buildAppSnippets(task?: string): string[] {
     }
 
     if (apps.has('notepad')) {
-        out.push('- Notepad: always click inside the main text area before typing to ensure the caret is in the document, not in a menu or settings pane. Use {"type":"uiClick","windowTitle":"Notepad","controlName":"Text Editor","wantToText":true} or another labeled text editor control exposed by UI Automation; do not guess coordinates.');
+        out.push('- Notepad: always focus the main text area before typing. Use findCandidates with a query like "Text Editor" or "Edit", then clickCandidate, then typeText.');
     }
 
     if (apps.has('outlook')) {
         out.push('- Outlook: before you click any Outlook ribbon/menu/button (including the button that opens a new email), confirm in the screenshot that an Outlook window is actually visible. If it is minimized or hidden behind other windows, first bring Outlook to the foreground (e.g. with focusWindow or launchApp) instead of clicking invisible controls.');
-        out.push('- Outlook: labels are often localized (for example in Turkish the new-mail button might say "Yeni E-posta" or similar). When you plan a uiClick for any Outlook control, ALWAYS use the exact label text you see on the button in the screenshot (including non-English characters), not an English guess like "New Email" unless that is exactly what is rendered.');
-        out.push('- Outlook compose window: if a compose window with To / Subject / message body fields is already visible in the screenshot, do NOT click the new-mail button again; continue using the existing compose window (click into the appropriate field with uiClick, then typeText).');
+        out.push('- Outlook: labels are often localized. Use findCandidates with the exact visible label you see (e.g. "To", "Subject", localized variants), then clickCandidate.');
+        out.push('- Outlook compose window: if a compose window with To / Subject / message body fields is already visible, continue using it (findCandidates -> clickCandidate -> typeText).');
     }
 
 

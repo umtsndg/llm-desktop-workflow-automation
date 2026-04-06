@@ -1,5 +1,6 @@
 import type { DesktopOperator } from '../desktop/DesktopOperator';
 import type { DesktopAction, ExecutionResult } from '../desktop/action-types';
+import { isUiCandidateProvider, type ListUiCandidatesOptions } from '../desktop/ui-candidates';
 
 import type { RecordedStep, RecordedWorkflow } from './recorded-workflow';
 
@@ -19,6 +20,20 @@ export class RecordingDesktopOperator implements DesktopOperator {
 
     constructor(private readonly inner: DesktopOperator, private readonly options: RecordingOptions) { }
 
+    async listUiCandidates(options: ListUiCandidatesOptions) {
+        if (isUiCandidateProvider(this.inner)) {
+            return this.inner.listUiCandidates(options);
+        }
+        return [];
+    }
+
+    resolveUiCandidateClickPoint(id: number): { x: number; y: number } | null {
+        if (isUiCandidateProvider(this.inner)) {
+            return this.inner.resolveUiCandidateClickPoint(id);
+        }
+        return null;
+    }
+
     async screenshot() {
         const obs = await this.inner.screenshot();
         if (typeof obs.width === 'number' && typeof obs.height === 'number') {
@@ -37,21 +52,39 @@ export class RecordingDesktopOperator implements DesktopOperator {
         const results: ExecutionResult[] = [];
 
         for (const action of actions) {
-            const [result] = await this.inner.execute([action]);
+            // If a candidate click is requested, translate it into a stable, replayable
+            // normalized click action using the locally-resolved click point.
+            let actionToExecute: DesktopAction = action;
+            if (action.type === 'clickCandidate' && isUiCandidateProvider(this.inner)) {
+                const pt = this.inner.resolveUiCandidateClickPoint(action.id);
+                const w = this.screenWidth;
+                const h = this.screenHeight;
+                if (pt && typeof w === 'number' && w > 0 && typeof h === 'number' && h > 0) {
+                    actionToExecute = {
+                        type: 'click',
+                        button: action.button,
+                        nx: pt.x / w,
+                        ny: pt.y / h,
+                        hint: (action as any).hint ? String((action as any).hint) : `Click candidate ${action.id}`,
+                    };
+                }
+            }
+
+            const [result] = await this.inner.execute([actionToExecute]);
             if (!result) {
                 const fallback: ExecutionResult = {
                     ok: false,
-                    action,
+                    action: actionToExecute,
                     error: 'No execution result returned by operator',
                     executedAt: new Date().toISOString(),
                 };
                 results.push(fallback);
-                this.steps.push(this.buildRecordedStep(action, fallback));
+                this.steps.push(this.buildRecordedStep(actionToExecute, fallback));
                 continue;
             }
 
             results.push(result);
-            this.steps.push(this.buildRecordedStep(action, result));
+            this.steps.push(this.buildRecordedStep(actionToExecute, result));
         }
 
         return results;
@@ -120,6 +153,8 @@ function inferSemantic(action: DesktopAction): string {
             return `Scroll ${action.direction ?? 'down'} ${action.amount}`;
         case 'click':
             return 'Click at coordinates';
+        case 'clickCandidate':
+            return `Click candidate: ${action.id}`;
         default:
             return action.type;
     }

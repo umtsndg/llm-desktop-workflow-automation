@@ -1,5 +1,6 @@
 import type { DesktopOperator } from '../desktop/DesktopOperator';
 import type { DesktopAction } from '../desktop/action-types';
+import { formatCandidatesForPrompt, isUiCandidateProvider } from '../desktop/ui-candidates';
 
 import type { LLMChatClient, LLMContentPart, LLMMessage } from './llm-types';
 import { buildLoopSystemPrompt, buildPlanPrompt } from './loop-prompts';
@@ -16,6 +17,23 @@ export class DesktopActionPlanner {
 
     async plan(task: string, operator?: DesktopOperator, options?: PlanOptions): Promise<DesktopAction[]> {
         const messages: LLMMessage[] = [{ role: 'system', content: buildLoopSystemPrompt(task) }];
+
+        // When supported, gather actionable UI candidates so the model can
+        // choose by id (clickCandidate) instead of raw coordinates.
+        if (operator && isUiCandidateProvider(operator)) {
+            const expectedTitle = options?.expectedWindowTitle ?? inferExpectedWindowTitle(task);
+            if (expectedTitle) {
+                const candidates = await operator
+                    .listUiCandidates({ windowTitle: expectedTitle, match: 'contains', limit: 35 })
+                    .catch(() => []);
+                if (candidates.length > 0) {
+                    messages.push({
+                        role: 'user',
+                        content: `UI candidates (choose by id using clickCandidate):\n${formatCandidatesForPrompt(candidates, 35)}`,
+                    });
+                }
+            }
+        }
 
         if (options?.includeScreenshot && operator) {
             const obs = await operator.screenshot();
@@ -75,6 +93,7 @@ export class DesktopActionPlanner {
             a.type === 'pressKey' ||
             a.type === 'hotkey' ||
             a.type === 'typeText' ||
+            a.type === 'clickCandidate' ||
             a.type === 'uiClick' ||
             a.type === 'scroll';
 
@@ -121,6 +140,7 @@ function inferExpectedWindowTitle(task: string, launchCommand?: string): string 
     if (t.includes('powerpoint') || cmd?.includes('powerpnt')) return 'PowerPoint';
     if (t.includes('chrome') || cmd?.includes('chrome')) return 'Chrome';
     if (t.includes('edge') || cmd?.includes('msedge')) return 'Edge';
+    if (t.includes('outlook') || t.includes('email') || t.includes('e-mail') || t.includes('mail') || cmd?.includes('outlook')) return 'Outlook';
     if (t.includes('command prompt') || t.includes('cmd') || cmd === 'cmd') return 'Command Prompt';
     if (t.includes('visual studio code') || t.includes('vs code') || cmd?.includes('code')) return 'Visual Studio Code';
     if (t.includes('calculator') || cmd?.includes('calc')) return 'Calculator';

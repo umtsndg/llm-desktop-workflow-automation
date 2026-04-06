@@ -19,6 +19,7 @@ import type {
     MouseButton,
 } from './action-types';
 import type { DesktopOperator } from './DesktopOperator';
+import type { ListUiCandidatesOptions, UiCandidate } from './ui-candidates';
 
 const buttonMap: Record<MouseButton, Button> = {
     left: Button.LEFT,
@@ -60,6 +61,7 @@ const SIMPLE_CHAR_KEY_MAP: Record<string, { key: Key; shift?: boolean }> = {
 
 export class NutJsDesktopOperator implements DesktopOperator {
     private lastScreenshot: DesktopObservation | null = null;
+    private lastUiCandidates: UiCandidate[] | null = null;
 
     constructor() {
         mouse.config.autoDelayMs = 150;
@@ -115,6 +117,91 @@ export class NutJsDesktopOperator implements DesktopOperator {
         };
         this.lastScreenshot = observation;
         return observation;
+    }
+
+    async listUiCandidates(options: ListUiCandidatesOptions): Promise<UiCandidate[]> {
+        const maxLimit = 400;
+        const limit = typeof options.limit === 'number' && Number.isFinite(options.limit) ? Math.max(1, Math.min(maxLimit, options.limit)) : 40;
+        const match = options.match === 'exact' ? 'exact' : 'contains';
+
+        const script = buildUiCandidatesScript(options.windowTitle, match, limit);
+        const output = await runPowerShell(script).catch((err) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            try {
+                console.error('[Desktop][UIAutomation] Candidates PowerShell error:', msg);
+            } catch {
+                // ignore logging issues
+            }
+            return '';
+        });
+        const raw = (output ?? '').trim();
+        if (!raw) {
+            this.lastUiCandidates = [];
+            return [];
+        }
+
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            console.error('[Desktop][UIAutomation] Invalid candidates JSON:', raw.slice(0, 200));
+            this.lastUiCandidates = [];
+            return [];
+        }
+
+        if (!Array.isArray(parsed)) {
+            this.lastUiCandidates = [];
+            return [];
+        }
+
+        const candidates: UiCandidate[] = [];
+        for (const item of parsed) {
+            const o = item as any;
+            const id = typeof o.id === 'number' && Number.isFinite(o.id) ? o.id : null;
+            const role = typeof o.role === 'string' ? o.role : '';
+            const text = typeof o.text === 'string' ? o.text : '';
+            const bbox = Array.isArray(o.bbox) && o.bbox.length === 4 ? o.bbox.map((n: any) => Number(n)) : null;
+            if (id === null || !bbox || bbox.some((n: number) => !Number.isFinite(n))) continue;
+
+            const enabled = Boolean(o.enabled);
+            const visible = Boolean(o.visible);
+            const clickable = Boolean(o.clickable);
+            const typeable = Boolean(o.typeable);
+
+            const clickPoint =
+                o.clickPoint && typeof o.clickPoint.x === 'number' && typeof o.clickPoint.y === 'number'
+                    ? { x: o.clickPoint.x, y: o.clickPoint.y }
+                    : undefined;
+
+            candidates.push({
+                id,
+                role,
+                text,
+                bbox: [bbox[0], bbox[1], bbox[2], bbox[3]],
+                enabled,
+                visible,
+                clickable,
+                typeable,
+                ...(typeof o.automationId === 'string' && o.automationId ? { automationId: o.automationId } : {}),
+                ...(typeof o.className === 'string' && o.className ? { className: o.className } : {}),
+                ...(typeof o.frameworkId === 'string' && o.frameworkId ? { frameworkId: o.frameworkId } : {}),
+                ...(typeof o.controlType === 'string' && o.controlType ? { controlType: o.controlType } : {}),
+                ...(clickPoint ? { clickPoint } : {}),
+            });
+        }
+
+        this.lastUiCandidates = candidates;
+        return candidates;
+    }
+
+    resolveUiCandidateClickPoint(id: number): { x: number; y: number } | null {
+        const candidates = this.lastUiCandidates;
+        if (!candidates) return null;
+        const c = candidates.find((x) => x.id === id);
+        if (!c) return null;
+        if (c.clickPoint) return c.clickPoint;
+        const [x, y, w, h] = c.bbox;
+        return { x: Math.round(x + w / 2), y: Math.round(y + h / 2) };
     }
 
     async execute(actions: DesktopAction[]): Promise<ExecutionResult[]> {
@@ -186,6 +273,12 @@ export class NutJsDesktopOperator implements DesktopOperator {
 
     private async executeOne(action: DesktopAction): Promise<void> {
         switch (action.type) {
+            case 'findCandidates': {
+                // Planning-only action: the loop agent should intercept this and
+                // re-prompt with a filtered candidate list.
+                throw new Error('findCandidates is a planning-only action handled by IterativeDesktopAgent.');
+            }
+
             case 'typeText': {
                 await this.releaseModifierKeysBestEffort();
                 await this.typeTextSafe(action.text, action.delayMs);
@@ -276,6 +369,17 @@ export class NutJsDesktopOperator implements DesktopOperator {
                 const coords = await this.resolveCoordinates(x, y, nx, ny);
 
                 await mouse.move(straightTo(new Point(coords.x, coords.y)));
+                await mouse.click(buttonMap[button]);
+                return;
+            }
+
+            case 'clickCandidate': {
+                const button: MouseButton = (action.button ?? 'left') as MouseButton;
+                const pt = this.resolveUiCandidateClickPoint(action.id);
+                if (!pt) {
+                    throw new Error(`Unknown candidate id ${action.id}. Ensure candidates were listed before clicking.`);
+                }
+                await mouse.move(straightTo(new Point(pt.x, pt.y)));
                 await mouse.click(buttonMap[button]);
                 return;
             }
@@ -1014,6 +1118,238 @@ $found = Find-UiaElementUnified -WindowTitle $winTitle -ControlName $controlName
 if (-not $found) { exit 2 }
 
 "$($found.X),$($found.Y),$($found.Width),$($found.Height),$($found.ClickX),$($found.ClickY)"
+`.trim();
+}
+
+function buildUiCandidatesScript(windowTitle: string, match: 'contains' | 'exact', limit: number): string {
+    const winTitlePs = psStringLiteral(windowTitle);
+    const matchPs = psStringLiteral(match);
+    const limitNum = Number.isFinite(limit) ? Math.max(1, Math.min(400, Math.round(limit))) : 40;
+
+    return `
+Add-Type -AssemblyName UIAutomationClient | Out-Null
+
+function Get-UiaSafeCurrentProperty {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element,
+
+        [Parameter(Mandatory)]
+        [string]$PropertyName
+    )
+
+    try { return $Element.Current.$PropertyName } catch { return $null }
+}
+
+function Get-UiaLabelText {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element
+    )
+
+    try {
+        $lbl = $Element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::LabeledByProperty)
+        if ($lbl -and ($lbl -is [System.Windows.Automation.AutomationElement])) {
+            $n = [string](Get-UiaSafeCurrentProperty -Element $lbl -PropertyName "Name")
+            if (-not [string]::IsNullOrWhiteSpace($n)) { return $n }
+        }
+    } catch {
+    }
+
+    return $null
+}
+
+function Test-UiaPatternAvailable {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element,
+
+        [Parameter(Mandatory)]
+        [ValidateSet("Value","Text","TextEdit","Invoke","SelectionItem","ExpandCollapse","Toggle","LegacyIAccessible")]
+        [string]$PatternName
+    )
+
+    try {
+        switch ($PatternName) {
+            "Value"         { return [bool]$Element.Current.IsValuePatternAvailable }
+            "Text"          { return [bool]$Element.Current.IsTextPatternAvailable }
+            "TextEdit"      { return [bool]$Element.Current.IsTextEditPatternAvailable }
+            "Invoke"        { return [bool]$Element.Current.IsInvokePatternAvailable }
+            "SelectionItem" { return [bool]$Element.Current.IsSelectionItemPatternAvailable }
+            "ExpandCollapse"{ return [bool]$Element.Current.IsExpandCollapsePatternAvailable }
+            "Toggle"        { return [bool]$Element.Current.IsTogglePatternAvailable }
+            "LegacyIAccessible" { return [bool]$Element.Current.IsLegacyIAccessiblePatternAvailable }
+        }
+    } catch {
+        return $false
+    }
+
+    return $false
+}
+
+function Get-UiaElementClickablePointOrCenter {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element
+    )
+
+    try {
+        $pt = $null
+        $has = $Element.TryGetClickablePoint([ref]$pt)
+        if ($has -and $pt) {
+            return [pscustomobject]@{ X = [int][math]::Round($pt.X); Y = [int][math]::Round($pt.Y) }
+        }
+    } catch {
+    }
+
+    $rect = $null
+    try { $rect = $Element.Current.BoundingRectangle } catch {}
+    if ($rect -and -not $rect.IsEmpty) {
+        return [pscustomobject]@{ X = [int][math]::Round($rect.X + ($rect.Width / 2)); Y = [int][math]::Round($rect.Y + ($rect.Height / 2)) }
+    }
+
+    return $null
+}
+
+function Find-UiaWindowByTitle {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Title,
+        [Parameter(Mandatory)]
+        [ValidateSet("contains","exact")]
+        [string]$Match
+    )
+
+    function Test-TitleMatch {
+        param(
+            [string]$Name
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+        if ($Match -eq "exact") { return ($Name -eq $Title) }
+        try { return ($Name.IndexOf($Title, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) } catch { return $false }
+    }
+
+    # Prefer the currently focused window (important when multiple Outlook windows exist).
+    try {
+        $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+        if ($focused) {
+            $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+            $cur = $focused
+            for ($k = 0; $k -lt 50 -and $cur; $k++) {
+                $ct = $null
+                try { $ct = (Get-UiaSafeCurrentProperty -Element $cur -PropertyName "ControlType").ProgrammaticName } catch {}
+                if ([string]$ct -match 'Window') {
+                    $n = [string](Get-UiaSafeCurrentProperty -Element $cur -PropertyName "Name")
+                    if (Test-TitleMatch -Name $n) { return $cur }
+                    break
+                }
+                $cur = $walker.GetParent($cur)
+            }
+        }
+    } catch {
+        # ignore
+    }
+
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($w in $wins) {
+        $name = [string](Get-UiaSafeCurrentProperty -Element $w -PropertyName "Name")
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        if (Test-TitleMatch -Name $name) { return $w }
+    }
+    return $null
+}
+
+$winTitle = ${winTitlePs}
+$match = ${matchPs}
+$limit = ${limitNum}
+
+$window = Find-UiaWindowByTitle -Title $winTitle -Match $match
+if (-not $window) { exit 2 }
+
+$elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+$items = New-Object System.Collections.ArrayList
+
+for ($i = 0; $i -lt $elements.Count; $i++) {
+    $e = $elements.Item($i)
+    if (-not $e) { continue }
+
+    $enabled = [bool](Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsEnabled")
+    $focusable = [bool](Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsKeyboardFocusable")
+    $offscreen = [bool](Get-UiaSafeCurrentProperty -Element $e -PropertyName "IsOffscreen")
+    $visible = -not $offscreen
+
+    $rect = $null
+    try { $rect = $e.Current.BoundingRectangle } catch {}
+    if (-not $rect -or $rect.IsEmpty) { continue }
+    if ($rect.Width -lt 3 -or $rect.Height -lt 3) { continue }
+
+    $name = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "Name")
+    $help = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "HelpText")
+    $label = Get-UiaLabelText -Element $e
+    $autoId = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "AutomationId")
+    $class = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "ClassName")
+    $frameworkId = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "FrameworkId")
+    $ct = $null
+    try { $ct = (Get-UiaSafeCurrentProperty -Element $e -PropertyName "ControlType").ProgrammaticName } catch {}
+    $controlType = [string]$ct
+
+    $clickable = (Test-UiaPatternAvailable -Element $e -PatternName "Invoke") -or (Test-UiaPatternAvailable -Element $e -PatternName "SelectionItem") -or (Test-UiaPatternAvailable -Element $e -PatternName "ExpandCollapse") -or (Test-UiaPatternAvailable -Element $e -PatternName "Toggle") -or (Test-UiaPatternAvailable -Element $e -PatternName "LegacyIAccessible")
+    $typeable = (Test-UiaPatternAvailable -Element $e -PatternName "TextEdit") -or (Test-UiaPatternAvailable -Element $e -PatternName "Text") -or (Test-UiaPatternAvailable -Element $e -PatternName "Value")
+
+    # Outlook often doesn't expose the expected UIA patterns, so fall back to heuristics:
+    # keep elements that are labeled, focusable, or have a commonly actionable role.
+    $hasLabel = -not [string]::IsNullOrWhiteSpace($name) -or -not [string]::IsNullOrWhiteSpace($autoId)
+    $isInterestingRole = $false
+    if (-not [string]::IsNullOrWhiteSpace($controlType)) {
+        $isInterestingRole = $controlType -match 'Button|Edit|Document|TabItem|MenuItem|ListItem|TreeItem|Hyperlink|ComboBox|CheckBox|RadioButton|SplitButton'
+    }
+
+    if (-not $clickable -and -not $typeable -and -not $hasLabel -and -not $focusable -and -not $isInterestingRole) { continue }
+
+    $text = $name
+    if ([string]::IsNullOrWhiteSpace($text) -and -not [string]::IsNullOrWhiteSpace($label)) { $text = $label }
+    if ([string]::IsNullOrWhiteSpace($text) -and -not [string]::IsNullOrWhiteSpace($help)) { $text = $help }
+    if ([string]::IsNullOrWhiteSpace($text) -and -not [string]::IsNullOrWhiteSpace($autoId)) { $text = $autoId }
+
+    $pt = Get-UiaElementClickablePointOrCenter -Element $e
+
+    $obj = [pscustomobject]@{
+        role = $controlType
+        text = $text
+        bbox = @(
+            [int][math]::Round($rect.X),
+            [int][math]::Round($rect.Y),
+            [int][math]::Round($rect.Width),
+            [int][math]::Round($rect.Height)
+        )
+        enabled = $enabled
+        visible = $visible
+        focusable = $focusable
+        clickable = [bool]$clickable
+        typeable = [bool]$typeable
+        automationId = $autoId
+        className = $class
+        frameworkId = $frameworkId
+        controlType = $controlType
+        clickPoint = $(if ($pt) { [pscustomobject]@{ x = $pt.X; y = $pt.Y } } else { $null })
+    }
+
+    [void]$items.Add($obj)
+}
+
+$ranked = $items | Sort-Object @{Expression={ if ($_.typeable) { 0 } elseif ($_.clickable) { 1 } elseif ($_.focusable) { 2 } else { 3 } }}, @{Expression={ $_.bbox[1] }}, @{Expression={ $_.bbox[0] }}
+$limited = $ranked | Select-Object -First $limit
+
+$out = @()
+$id = 0
+foreach ($it in $limited) {
+    $out += [pscustomobject]@{ id = $id; role = $it.role; text = $it.text; bbox = $it.bbox; enabled = $it.enabled; visible = $it.visible; clickable = $it.clickable; typeable = $it.typeable; automationId = $it.automationId; className = $it.className; frameworkId = $it.frameworkId; controlType = $it.controlType; clickPoint = $it.clickPoint }
+    $id++
+}
+
+$out | ConvertTo-Json -Depth 6 -Compress
 `.trim();
 }
 
