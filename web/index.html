@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Desktop Automation Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="chat-layout">
+        <header class="chat-header">
+            <div>
+                <p class="eyebrow">Local Host Runner</p>
+                <h1>Desktop Automation Assistant</h1>
+            </div>
+            <div class="header-controls">
+                <div class="pill" id="status-pill">Ready</div>
+            </div>
+        </header>
+
+        <div class="chat-container">
+            <div id="messages" class="messages"></div>
+        </div>
+
+        <div class="chat-input-area">
+            <form id="chat-form">
+                <div class="input-group">
+                    <textarea id="task-input" placeholder="Describe a task to automate..." rows="3"></textarea>
+                    <button type="submit" id="send-btn">Send</button>
+                </div>
+
+                <details class="options-details">
+                    <summary>Settings</summary>
+                    <div class="options-grid">
+                        <label class="option">
+                            <span>Mode</span>
+                            <select id="mode">
+                                <option value="auto" selected>auto</option>
+                                <option value="loop">loop</option>
+                                <option value="run">run</option>
+                                <option value="plan">plan</option>
+                                <option value="match">match</option>
+                            </select>
+                        </label>
+
+                        <label class="option">
+                            <span>Max Iterations</span>
+                            <input id="max-iterations" type="number" min="1" max="80" value="20" />
+                        </label>
+
+                        <label class="option">
+                            <span>Threshold</span>
+                            <input id="threshold" type="number" min="0" max="1" step="0.01" value="0.55" />
+                        </label>
+
+                        <label class="option">
+                            <input type="checkbox" id="record" checked /> Record
+                        </label>
+
+                        <label class="option">
+                            <input type="checkbox" id="screenshot" /> Screenshot
+                        </label>
+
+                        <label class="option">
+                            <input type="checkbox" id="show-llm" /> Show LLM
+                        </label>
+                    </div>
+                </details>
+            </form>
+        </div>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+</body>
+
+</html>

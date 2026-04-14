@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/test-sort-salary.ts",
     "cli": "tsx src/cli.ts",
+    "web:server": "tsx src/web/server.ts",
     "example:notepad-agent": "tsx src/test-llm-loop-excel-chart.ts",
     "test-sort-salary": "tsx src/test-sort-salary.ts",
     "test": "echo \"Error: no test specified\" && exit 1"

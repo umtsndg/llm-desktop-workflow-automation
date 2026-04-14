@@ -1,30 +1,22 @@
 # llm-desktop-workflow-automation
 This project explores LLM-based desktop workflow automation on Windows. Users describe tasks in natural language, which are executed and recorded in a reusable form. Previously recorded workflows are replayed for similar requests, improving reliability and efficiency for repeated desktop tasks.
 
-## Local Web UI/API + Host Runner (Windows)
+## Local Web UI (Windows)
 
-The web UI/API runs locally (Node.js), and the actual desktop automation (NutJS controlling Notepad/Excel/etc.) runs on the same Windows host runner.
+The web UI runs locally with Node.js and triggers the same desktop automation engine used by the CLI.
 
-### Automated start
+### Start
 
-From the repo folder:
-
-- `npm run web:start`
-
-This will:
-- generate `RUNNER_SECRET` (and write it to `.env`)
-- start the local web UI/API in the background on `http://localhost:3000`
-- open the browser
-- start the host runner in the foreground
-
-To stop the local web UI/API:
-
-- `npm run web:stop`
-
-### Manual start
-
-PowerShell:
+From the repo folder in PowerShell:
 
 - `$env:OPENAI_API_KEY = "..."`
 - `npm run web:server`
-- In another terminal: `npm run web:runner`
+
+Then open `http://localhost:3000` in your browser.
+
+### What the UI can do
+
+- Submit a natural-language task.
+- Choose execution mode: `auto`, `loop`, `run`, `plan`, or `match`.
+- Tune options like threshold and max iterations.
+- View JSON results and recent recordings.
