@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import { NutJsDesktopOperator } from './desktop/NutJsDesktopOperator';
+import { createDesktopOperator } from './desktop/createDesktopOperator';
 import { DesktopActionPlanner } from './llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from './llm/IterativeDesktopAgent';
 import { LoggingChatClient } from './llm/LoggingChatClient';
@@ -227,7 +227,7 @@ async function main() {
         const showLlm = Boolean(flags.showLlm || flags['show-llm']);
         const baseLlm = new OpenAIChatClient();
         const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
-        const operator = new NutJsDesktopOperator();
+        const operator = createDesktopOperator();
 
         const planner = new DesktopActionPlanner(llm);
         const actions = await planner.plan(task, operator, {
@@ -243,7 +243,7 @@ async function main() {
         const baseLlm = new OpenAIChatClient();
         const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
 
-        const baseDesktop = new NutJsDesktopOperator();
+        const baseDesktop = createDesktopOperator();
         const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
 
         const planner = new DesktopActionPlanner(llm);
@@ -270,7 +270,7 @@ async function main() {
         const baseLlm = new OpenAIChatClient();
         const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
 
-        const baseDesktop = new NutJsDesktopOperator();
+        const baseDesktop = createDesktopOperator();
         const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
 
         const agent = new IterativeDesktopAgent(llm);
@@ -297,7 +297,7 @@ async function main() {
         const raw = await fs.readFile(recordingFile, 'utf8');
         const workflow = JSON.parse(raw) as RecordedWorkflow;
 
-        const desktop = new NutJsDesktopOperator();
+        const desktop = createDesktopOperator();
         const result = await replayRecordedWorkflow(desktop, workflow, { robust });
         console.log(JSON.stringify(result, null, 2));
         return;
@@ -313,7 +313,7 @@ async function main() {
         const match = bestWorkflowMatch(task, workflows, { minScore: Number.isFinite(threshold) ? threshold : 0.55 });
 
         if (match) {
-            const desktop = new NutJsDesktopOperator();
+            const desktop = createDesktopOperator();
             const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust });
             if (replayResult.ok) {
                 console.log(
@@ -343,7 +343,7 @@ async function main() {
         const baseLlm = new OpenAIChatClient();
         const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
 
-        const baseDesktop = new NutJsDesktopOperator();
+        const baseDesktop = createDesktopOperator();
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
 
         const agent = new IterativeDesktopAgent(llm);
