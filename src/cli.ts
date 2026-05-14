@@ -3,8 +3,7 @@ import { promises as fs } from 'node:fs';
 import { createDesktopOperator } from './desktop/createDesktopOperator';
 import { DesktopActionPlanner } from './llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from './llm/IterativeDesktopAgent';
-import { LoggingChatClient } from './llm/LoggingChatClient';
-import { OpenAIChatClient } from './llm/OpenAIChatClient';
+import { buildLlmClient, normalizeLLMProvider, providerApiKeyEnv, type LLMProvider } from './llm/llm-provider';
 import { RecordingDesktopOperator } from './workflows/RecordingDesktopOperator';
 import type { RecordedWorkflow } from './workflows/recorded-workflow';
 import { replayRecordedWorkflow } from './workflows/replay';
@@ -14,17 +13,21 @@ import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from 
 function usage(): string {
     return [
         'Usage:',
-        '  npm run cli -- plan "<task>" [--screenshot] [--showLlm]',
-        '  npm run cli -- run  "<task>" [--screenshot] [--showLlm] [--record]',
-        '  npm run cli -- loop "<task>" [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--record]',
+        '  npm run cli -- plan "<task>" [--provider openai|gemini] [--screenshot] [--showLlm]',
+        '  npm run cli -- run  "<task>" [--provider openai|gemini] [--screenshot] [--showLlm] [--record]',
+        '  npm run cli -- loop "<task>" [--provider openai|gemini] [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--record]',
         '  npm run cli -- replay "<recordingFile>" [--no-robust]',
         '  npm run cli -- match "<task>" [--limit N] [--threshold S]',
-        '  npm run cli -- auto "<task>" [--threshold S] [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--no-robust] [--no-record]',
+        '  npm run cli -- auto "<task>" [--provider openai|gemini] [--threshold S] [--maxIterations N] [--no-verify] [--no-perception] [--showLlm] [--no-robust] [--no-record]',
         '',
         'Environment:',
-        '  OPENAI_API_KEY (required for plan/run/loop)',
-        '  OPENAI_MODEL (optional)',
+        '  LLM_PROVIDER=openai|gemini (optional, default openai)',
+        '  OPENAI_API_KEY (required for OpenAI plan/run/loop/auto)',
+        '  OPENAI_MODEL (optional, default gpt-5.1)',
         '  OPENAI_BASE_URL (optional)',
+        '  GEMINI_API_KEY (required for Gemini plan/run/loop/auto)',
+        '  GEMINI_MODEL (optional, default gemini-2.5-flash)',
+        '  GEMINI_BASE_URL (optional)',
         '',
         'Notes:',
         '  - Outputs JSON to stdout (easy to pipe/log).',
@@ -35,22 +38,23 @@ function usage(): string {
     ].join('\n');
 }
 
-async function ensureApiKeyInEnv(): Promise<void> {
-    const existing = process.env.OPENAI_API_KEY;
+async function ensureApiKeyInEnv(provider: LLMProvider): Promise<void> {
+    const envName = providerApiKeyEnv(provider);
+    const existing = process.env[envName];
     if (existing && existing.trim()) return;
 
     // Keep stdout clean (CLI outputs JSON). Prompt on stderr.
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         throw new Error(
-            'Missing OPENAI_API_KEY environment variable and cannot prompt (non-interactive terminal). Set OPENAI_API_KEY and retry.'
+            `Missing ${envName} environment variable and cannot prompt (non-interactive terminal). Set ${envName} and retry.`
         );
     }
 
-    const key = (await promptHidden('Enter OPENAI_API_KEY: ')).trim();
+    const key = (await promptHidden(`Enter ${envName}: `)).trim();
     if (!key) {
-        throw new Error('OPENAI_API_KEY was empty. Set OPENAI_API_KEY and retry.');
+        throw new Error(`${envName} was empty. Set ${envName} and retry.`);
     }
-    process.env.OPENAI_API_KEY = key;
+    process.env[envName] = key;
 }
 
 function promptHidden(prompt: string): Promise<string> {
@@ -176,9 +180,11 @@ async function main() {
         return;
     }
 
+    const provider = normalizeLLMProvider(flags.provider);
+
     // Only prompt for credentials when we are actually going to call the LLM.
     if (cmd === 'plan' || cmd === 'run' || cmd === 'loop' || cmd === 'auto') {
-        await ensureApiKeyInEnv();
+        await ensureApiKeyInEnv(provider);
     }
 
     if (cmd === 'match') {
@@ -225,8 +231,7 @@ async function main() {
     if (cmd === 'plan') {
         const task = arg;
         const showLlm = Boolean(flags.showLlm || flags['show-llm']);
-        const baseLlm = new OpenAIChatClient();
-        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+        const llm = buildLlmClient({ provider, showLlm });
         const operator = createDesktopOperator();
 
         const planner = new DesktopActionPlanner(llm);
@@ -240,8 +245,7 @@ async function main() {
     if (cmd === 'run') {
         const task = arg;
         const showLlm = Boolean(flags.showLlm || flags['show-llm']);
-        const baseLlm = new OpenAIChatClient();
-        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+        const llm = buildLlmClient({ provider, showLlm });
 
         const baseDesktop = createDesktopOperator();
         const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
@@ -267,8 +271,7 @@ async function main() {
     if (cmd === 'loop') {
         const task = arg;
         const showLlm = Boolean(flags.showLlm || flags['show-llm']);
-        const baseLlm = new OpenAIChatClient();
-        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+        const llm = buildLlmClient({ provider, showLlm });
 
         const baseDesktop = createDesktopOperator();
         const executor = flags.record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
@@ -340,8 +343,7 @@ async function main() {
 
         // Fallback to LLM loop (repair/update), then optionally store the improved execution.
         const showLlm = Boolean(flags.showLlm || flags['show-llm']);
-        const baseLlm = new OpenAIChatClient();
-        const llm = showLlm ? new LoggingChatClient(baseLlm, { logRequests: false, logResponses: true }) : baseLlm;
+        const llm = buildLlmClient({ provider, showLlm });
 
         const baseDesktop = createDesktopOperator();
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task }) : baseDesktop;
