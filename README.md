@@ -14,6 +14,13 @@ From the repo folder in PowerShell:
 
 Then open `http://localhost:3000` in your browser.
 
+To use Gemini instead, set:
+
+- `$env:GEMINI_API_KEY = "..."`
+- `$env:LLM_PROVIDER = "gemini"`
+
+You can also choose OpenAI or Gemini from the web UI settings, or pass `--provider gemini` in the CLI.
+
 ### What the UI can do
 
 - Submit a natural-language task.

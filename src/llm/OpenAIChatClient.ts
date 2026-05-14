@@ -4,7 +4,10 @@ type OpenAIChatClientOptions = {
     apiKey: string;
     baseUrl?: string;
     model: string;
+    visionModel?: string;
     temperature?: number;
+    providerName?: string;
+    chatCompletionsPath?: string;
 };
 
 function requiredEnv(name: string): string {
@@ -17,14 +20,20 @@ export class OpenAIChatClient implements LLMChatClient {
     private readonly apiKey: string;
     private readonly baseUrl: string;
     private readonly model: string;
+    private readonly visionModel: string;
     private readonly temperature: number;
+    private readonly providerName: string;
+    private readonly chatCompletionsPath: string;
 
     constructor(options?: Partial<OpenAIChatClientOptions>) {
         this.apiKey = options?.apiKey ?? requiredEnv('OPENAI_API_KEY');
         this.baseUrl = (options?.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com').replace(/\/$/, '');
         // Default to GPT 5.1 unless overridden via options or OPENAI_MODEL.
         this.model = options?.model ?? (process.env.OPENAI_MODEL ?? 'gpt-5.1');
+        this.visionModel = options?.visionModel ?? process.env.OPENAI_VISION_MODEL ?? this.model;
         this.temperature = options?.temperature ?? 0.2;
+        this.providerName = options?.providerName ?? 'OpenAI';
+        this.chatCompletionsPath = options?.chatCompletionsPath ?? '/v1/chat/completions';
     }
 
     async chat(messages: LLMMessage[]): Promise<LLMChatResult> {
@@ -33,14 +42,15 @@ export class OpenAIChatClient implements LLMChatClient {
 
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+                const model = hasImageInput(messages) ? this.visionModel : this.model;
+                const res = await fetch(`${this.baseUrl}${this.chatCompletionsPath}`, {
                     method: 'POST',
                     headers: {
                         'content-type': 'application/json',
                         authorization: `Bearer ${this.apiKey}`,
                     },
                     body: JSON.stringify({
-                        model: this.model,
+                        model,
                         temperature: this.temperature,
                         messages,
                     }),
@@ -65,13 +75,13 @@ export class OpenAIChatClient implements LLMChatClient {
                         continue;
                     }
 
-                    throw new Error(`OpenAI chat failed (${res.status}): ${text || res.statusText}`);
+                    throw new Error(`${this.providerName} chat failed (${res.status}): ${text || res.statusText}`);
                 }
 
                 const json = (await res.json()) as any;
                 const content = json?.choices?.[0]?.message?.content;
                 if (typeof content !== 'string') {
-                    throw new Error('OpenAI chat returned no message content');
+                    throw new Error(`${this.providerName} chat returned no message content`);
                 }
 
                 return {
@@ -94,6 +104,14 @@ export class OpenAIChatClient implements LLMChatClient {
 
         throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
     }
+}
+
+function hasImageInput(messages: LLMMessage[]): boolean {
+    for (const m of messages) {
+        if (!Array.isArray(m.content)) continue;
+        if (m.content.some((p) => p.type === 'image_url')) return true;
+    }
+    return false;
 }
 
 function sleep(ms: number): Promise<void> {

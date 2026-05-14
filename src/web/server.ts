@@ -5,8 +5,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { NutJsDesktopOperator } from '../desktop/NutJsDesktopOperator';
 import { DesktopActionPlanner } from '../llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from '../llm/IterativeDesktopAgent';
-import { LoggingChatClient } from '../llm/LoggingChatClient';
-import { OpenAIChatClient } from '../llm/OpenAIChatClient';
+import { buildLlmClient, normalizeLLMProvider, providerModel, type LLMProvider } from '../llm/llm-provider';
 import { RecordingDesktopOperator } from '../workflows/RecordingDesktopOperator';
 import { replayRecordedWorkflow } from '../workflows/replay';
 import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from '../workflows/retrieval';
@@ -20,6 +19,7 @@ type ExecuteMode = 'plan' | 'run' | 'loop' | 'match' | 'auto';
 type ExecuteRequest = {
     task: string;
     mode: ExecuteMode;
+    provider?: LLMProvider;
     maxIterations?: number;
     threshold?: number;
     robust?: boolean;
@@ -78,6 +78,7 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
     return {
         task,
         mode: mode as ExecuteMode,
+        provider: normalizeLLMProvider(obj.provider),
         maxIterations: Number.isFinite(Number(obj.maxIterations)) ? Number(obj.maxIterations) : undefined,
         threshold: Number.isFinite(Number(obj.threshold)) ? Number(obj.threshold) : undefined,
         robust: typeof obj.robust === 'boolean' ? obj.robust : undefined,
@@ -87,15 +88,14 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
     };
 }
 
-function buildLlm(showLlm: boolean) {
-    const base = new OpenAIChatClient();
-    if (!showLlm) return base;
-    return new LoggingChatClient(base, { logRequests: false, logResponses: true });
+function buildProviderLlm(showLlm: boolean, provider?: LLMProvider) {
+    return buildLlmClient({ provider, showLlm });
 }
 
 async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     const threshold = Number.isFinite(input.threshold) ? (input.threshold as number) : 0.55;
     const showLlm = input.showLlm === true;
+    const provider = input.provider ?? normalizeLLMProvider(undefined);
 
     if (input.mode === 'match') {
         const workflows = await loadRecordedWorkflows();
@@ -104,6 +104,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         return {
             ok: true,
             mode: input.mode,
+            provider,
             task: input.task,
             recordingsFound: workflows.length,
             threshold,
@@ -128,19 +129,20 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     }
 
     if (input.mode === 'plan') {
-        const planner = new DesktopActionPlanner(buildLlm(showLlm));
+        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
         const operator = new NutJsDesktopOperator();
         const actions = await planner.plan(input.task, operator, { includeScreenshot: input.screenshot === true });
         return {
             ok: true,
             mode: input.mode,
+            provider,
             task: input.task,
             actions,
         };
     }
 
     if (input.mode === 'run') {
-        const planner = new DesktopActionPlanner(buildLlm(showLlm));
+        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
         const baseDesktop = new NutJsDesktopOperator();
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
@@ -158,6 +160,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         return {
             ok,
             mode: input.mode,
+            provider,
             task: input.task,
             actions,
             results,
@@ -170,7 +173,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
 
-        const agent = new IterativeDesktopAgent(buildLlm(showLlm));
+        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
         const out = await agent.run(input.task, executor, {
             maxIterations: Number.isFinite(input.maxIterations as number) ? (input.maxIterations as number) : undefined,
         });
@@ -184,6 +187,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         return {
             ...out,
             mode: input.mode,
+            provider,
             task: input.task,
             recordingPath,
         };
@@ -201,6 +205,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
             return {
                 ok: true,
                 mode: input.mode,
+                provider,
                 task: input.task,
                 reused: true,
                 match: {
@@ -217,7 +222,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     const baseDesktop = new NutJsDesktopOperator();
     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
-    const agent = new IterativeDesktopAgent(buildLlm(showLlm));
+    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
 
     const out = await agent.run(input.task, executor, {
         maxIterations: Number.isFinite(input.maxIterations as number) ? (input.maxIterations as number) : undefined,
@@ -232,6 +237,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     return {
         ok: out.ok,
         mode: input.mode,
+        provider,
         task: input.task,
         reused: false,
         fallback: true,
@@ -292,7 +298,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             ok: true,
             busy: activeRun !== null,
             activeRun,
-            model: process.env.OPENAI_MODEL ?? 'gpt-5.1',
+            provider: normalizeLLMProvider(undefined),
+            model: providerModel(normalizeLLMProvider(undefined)),
         });
         return true;
     }
@@ -344,6 +351,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             async function* runAutomationWithStream(req: ExecuteRequest) {
                 const threshold = Number.isFinite(req.threshold) ? (req.threshold as number) : 0.55;
                 const showLlm = req.showLlm === true;
+                const provider = req.provider ?? normalizeLLMProvider(undefined);
 
                 function humanizeAction(log: string): string | null {
                     // Parse "Last action before iteration N: {...}"
@@ -395,7 +403,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                     const record = req.record === true;
                     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
 
-                    const agent = new IterativeDesktopAgent(buildLlm(showLlm));
+                    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
 
                     // Override console.error to capture logs
                     const originalError = console.error;
@@ -441,6 +449,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                             result: {
                                 ...out,
                                 mode: req.mode,
+                                provider,
                                 task: req.task,
                                 recordingPath,
                             },
@@ -457,7 +466,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         text: '📋 Let me create an action plan for you...',
                     };
 
-                    const planner = new DesktopActionPlanner(buildLlm(showLlm));
+                    const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
                     const operator = new NutJsDesktopOperator();
                     const actions = await planner.plan(req.task, operator, { includeScreenshot: req.screenshot === true });
 
@@ -467,6 +476,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         result: {
                             ok: true,
                             mode: req.mode,
+                            provider,
                             task: req.task,
                             actions,
                         },
@@ -502,6 +512,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         result: {
                             ok: replay.ok,
                             mode: req.mode,
+                            provider,
                             task: req.task,
                             reused: true,
                             match,
@@ -519,7 +530,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 const baseDesktop = new NutJsDesktopOperator();
                 const record = req.record !== false;
                 const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
-                const agent = new IterativeDesktopAgent(buildLlm(showLlm));
+                const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
 
                 // Capture logs
                 const originalError = console.error;
@@ -565,6 +576,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         result: {
                             ok: out.ok,
                             mode: req.mode,
+                            provider,
                             task: req.task,
                             reused: false,
                             recordingPath,
@@ -594,7 +606,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             return true;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            const status = /OPENAI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
+            const status = /OPENAI_API_KEY|GEMINI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
             sendJson(res, status, { ok: false, error: message });
             return true;
         }
@@ -636,7 +648,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             return true;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            const status = /OPENAI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
+            const status = /OPENAI_API_KEY|GEMINI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
             sendJson(res, status, { ok: false, error: message });
             return true;
         } finally {

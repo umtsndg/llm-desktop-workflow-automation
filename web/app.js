@@ -1,5 +1,6 @@
 const form = document.getElementById('chat-form');
 const taskInput = document.getElementById('task-input');
+const providerInput = document.getElementById('provider');
 const modeInput = document.getElementById('mode');
 const maxIterationsInput = document.getElementById('max-iterations');
 const thresholdInput = document.getElementById('threshold');
@@ -57,6 +58,7 @@ async function submitTask(evt) {
 
     const payload = {
         task,
+        provider: providerInput.value,
         mode: modeInput.value,
         maxIterations: Number(maxIterationsInput.value),
         threshold: Number(thresholdInput.value),
