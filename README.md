@@ -26,12 +26,33 @@ The web UI runs locally with Node.js and triggers the same desktop automation en
 
 ### Start
 
-From the repo folder in PowerShell:
+From the repo folder:
 
-- `$env:OPENAI_API_KEY = "..."`
-- `npm run web:server`
+PowerShell:
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+npm run web:server
+```
+
+macOS/Linux shell:
+
+```sh
+export OPENAI_API_KEY="..."
+npm run web:server
+```
 
 Then open `http://localhost:3000` in your browser.
+
+### macOS quick check
+
+After installing Peekaboo and granting permissions:
+
+```sh
+export DESKTOP_OPERATOR=peekaboo
+export OPENAI_API_KEY="..."
+npm run cli -- loop "open TextEdit and type hello"
+```
 
 ### What the UI can do
 

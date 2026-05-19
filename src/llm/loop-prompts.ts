@@ -1,11 +1,23 @@
 import { supportedKeyNames } from '../desktop/supported-keys';
 
 export function buildLoopSystemPrompt(task?: string): string {
-    const keys = supportedKeyNames().join(', ');
-    const appSnippets = buildAppSnippets(task);
+    const platform = currentDesktopPlatform();
+    const keys = supportedKeysForPrompt(platform).join(', ');
+    const appSnippets = buildAppSnippets(task, platform);
+    const platformName =
+        platform === 'macos'
+            ? 'macOS'
+            : platform === 'windows'
+                ? 'Windows'
+                : 'Linux';
+    const terminalExamples =
+        platform === 'windows'
+            ? 'cmd.exe, Windows Terminal, PowerShell'
+            : 'Terminal, iTerm, shell';
+    const browserShortcut = platform === 'macos' ? 'cmd' : 'ctrl';
 
     return [
-        'You are a Windows GUI automation agent.',
+        `You are a ${platformName} GUI automation agent.`,
         'On each step you see: the task, short memory, current perception (active + open window titles), and a screenshot.',
         'Your job is to choose the SINGLE NEXT desktop action that moves toward the goal.',
         '',
@@ -32,9 +44,10 @@ export function buildLoopSystemPrompt(task?: string): string {
         '- The ONLY allowed way to click is clickCandidate (by id). Do NOT output click or uiClick at all.',
         '- If you are not provided a list of UI candidates ("Candidate N: ..."), use findCandidates to request candidates by query, then on the next iteration use clickCandidate.',
         '- If you do not see the element you need in the current candidate list, use findCandidates with a query like "To", "Subject", "Send", "Search", etc. Then on the next iteration pick from the filtered candidates using clickCandidate.',
-        '- Treat the "Active window" line in perception as ground truth. Your Thought must not contradict it: if it says the active window is cmd.exe, do NOT say "Outlook is currently active" even if Outlook appears in the open windows list; instead, say Outlook is open but not active and first bring it to the foreground.',
+        `- Treat the "Active window" line in perception as ground truth. Your Thought must not contradict it: if it says a terminal or development tool is active (${terminalExamples}), do NOT say the target app is currently active even if it appears in the open windows list; instead, say the target app is open but not active and first bring it to the foreground.`,
         '- Never claim that a specific app window is visible or in the foreground unless the active window title and screenshot clearly show it. If Outlook (or any other app) is minimized or hidden behind other windows, explicitly note that and first bring it to the foreground (for example with focusWindow or launchApp) before trying to click any of its controls.',
         '- To launch apps ("open Outlook", "open Excel"), ALWAYS use a single launchApp action in search mode, e.g. {"type":"launchApp","command":"Settings","mode":"search"}.',
+        `- For browser address bar shortcuts on this platform, use {"type":"hotkey","keys":["${browserShortcut}","l"]}.`,
         '- BEFORE ANY typeText action, always focus the correct input field first using clickCandidate. Never type into an unfocused or wrong field.',
         '- If the last action failed or had no visible effect, choose a different action or parameters instead of repeating it unchanged.',
         ...(appSnippets.length > 0
@@ -43,9 +56,10 @@ export function buildLoopSystemPrompt(task?: string): string {
     ].join('\n');
 }
 
-type KnownApp = 'spotify' | 'excel' | 'browser' | 'notepad' | 'outlook' | 'word';
+type DesktopPlatform = 'windows' | 'macos' | 'linux';
+type KnownApp = 'spotify' | 'excel' | 'browser' | 'notepad' | 'textedit' | 'outlook' | 'word';
 
-function buildAppSnippets(task?: string): string[] {
+function buildAppSnippets(task: string | undefined, platform: DesktopPlatform): string[] {
     const apps = detectApps(task);
     const out: string[] = [];
 
@@ -60,11 +74,20 @@ function buildAppSnippets(task?: string): string[] {
     }
 
     if (apps.has('browser')) {
-        out.push('- Browser (Chrome/Edge): prefer clicking the address bar before typing a URL; use {"type":"hotkey","keys":["ctrl","l"]} only as a fallback.');
+        const modifier = platform === 'macos' ? 'cmd' : 'ctrl';
+        out.push(`- Browser: prefer clicking the address bar before typing a URL; use {"type":"hotkey","keys":["${modifier}","l"]} only as a fallback.`);
     }
 
     if (apps.has('notepad')) {
-        out.push('- Notepad: always focus the main text area before typing. Use findCandidates with a query like "Text Editor" or "Edit", then clickCandidate, then typeText.');
+        if (platform === 'macos') {
+            out.push('- TextEdit: use TextEdit for Notepad-like plain text tasks on macOS. Always focus the main text area before typing; use findCandidates with a query like "text" or "body", then clickCandidate, then typeText.');
+        } else {
+            out.push('- Notepad: always focus the main text area before typing. Use findCandidates with a query like "Text Editor" or "Edit", then clickCandidate, then typeText.');
+        }
+    }
+
+    if (apps.has('textedit')) {
+        out.push('- TextEdit: always focus the main text area before typing. Use findCandidates with a query like "text" or "body", then clickCandidate, then typeText.');
     }
 
     if (apps.has('outlook')) {
@@ -86,10 +109,28 @@ function detectApps(task?: string): Set<KnownApp> {
     if (t.includes('excel') || t.includes('.xlsx')) apps.add('excel');
     if (t.includes('chrome') || t.includes('edge') || t.includes('browser') || t.includes('website') || t.includes('http')) apps.add('browser');
     if (t.includes('notepad')) apps.add('notepad');
+    if (t.includes('textedit') || t.includes('text edit')) apps.add('textedit');
     if (t.includes('outlook')) apps.add('outlook');
     if (t.includes('word')) apps.add('word');
 
     return apps;
+}
+
+function currentDesktopPlatform(): DesktopPlatform {
+    if (process.platform === 'darwin') return 'macos';
+    if (process.platform === 'win32') return 'windows';
+    return 'linux';
+}
+
+function supportedKeysForPrompt(platform: DesktopPlatform): string[] {
+    const keys = new Set(supportedKeyNames());
+    if (platform === 'macos') {
+        keys.add('cmd');
+        keys.add('command');
+        keys.add('meta');
+        keys.delete('windowskey');
+    }
+    return [...keys].sort();
 }
 
 export function buildPlanPrompt(task: string): string {
@@ -135,8 +176,8 @@ export function buildVerifyPrompt(input: {
         'You will be given perception (window titles) and possibly a screenshot as an image.',
         'Use that evidence to decide whether the goal is COMPLETE and SUCCESSFUL.',
         'Be strict: do not claim success unless you can see strong evidence in the screenshot/perception.',
-        'If the task requires typing specific text (e.g. in Notepad), ONLY return success=true when both of the following are true:',
-        '- The active window clearly corresponds to the intended app (e.g. Notepad for a "notepad" task, not a Settings or unrelated window).',
+        'If the task requires typing specific text (e.g. in Notepad or TextEdit), ONLY return success=true when both of the following are true:',
+        '- The active window clearly corresponds to the intended app (e.g. Notepad/TextEdit for a plain text task, not a Settings or unrelated window).',
         '- The required text from the goal is visibly present in the main content area (or very close to the caret) in the screenshot.',
         'If you cannot clearly confirm the text or the correct window from the evidence, treat the goal as NOT complete (success=false, done=false).',
         '',

@@ -305,7 +305,7 @@ export class IterativeDesktopAgent {
         const activeTitle = perception?.activeWindowTitle?.trim();
         const expectedTitle = inferExpectedWindowTitleFromTask(task);
 
-        const isBad = (t: string) => /powershell|windows terminal|cmd\.exe|command prompt|visual studio code/i.test(t);
+        const isBad = (t: string) => /powershell|windows terminal|cmd\.exe|command prompt|terminal|iterm|visual studio code/i.test(t);
         const isGarbled = (t: string) => /\uFFFD|�/.test(t) || /[\u0000-\u001f]/.test(t);
 
         const titlesToTry = [activeTitle, expectedTitle]
@@ -511,7 +511,7 @@ export class IterativeDesktopAgent {
 
         const activeTitle = perception?.activeWindowTitle?.trim();
         const expectedTitle = inferExpectedWindowTitleFromTask(task);
-        const isBad = (t: string) => /powershell|windows terminal|cmd\.exe|command prompt|visual studio code/i.test(t);
+        const isBad = (t: string) => /powershell|windows terminal|cmd\.exe|command prompt|terminal|iterm|visual studio code/i.test(t);
         const isGarbled = (t: string) => /\uFFFD|�/.test(t) || /[\u0000-\u001f]/.test(t);
 
         const titlesToTry = [this.lastCandidatesWindowTitle, activeTitle, expectedTitle]
@@ -721,7 +721,8 @@ function inferExpectedWindowTitleFromTask(task: string): string | null {
     const pptx = task.match(/([A-Za-z0-9 _-]+)\.pptx\b/i);
     if (pptx?.[1]) return pptx[1];
 
-    if (t.includes('notepad')) return 'Notepad';
+    if (t.includes('textedit') || t.includes('text edit')) return 'TextEdit';
+    if (t.includes('notepad')) return process.platform === 'darwin' ? 'TextEdit' : 'Notepad';
     if (t.includes('excel') || t.includes('.xlsx')) return 'Excel';
     if (t.includes('chrome')) return 'Chrome';
     if (t.includes('edge')) return 'Edge';

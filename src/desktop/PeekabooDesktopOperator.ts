@@ -182,7 +182,7 @@ export class PeekabooDesktopOperator implements DesktopOperator {
                 return;
 
             case 'launchApp':
-                await this.runPeekaboo(['app', 'launch', action.command, '--wait-until-ready']);
+                await this.launchApp(action.command, action.args);
                 return;
 
             case 'click': {
@@ -284,6 +284,22 @@ export class PeekabooDesktopOperator implements DesktopOperator {
         });
     }
 
+    private async launchApp(command: string, args?: string[]): Promise<void> {
+        try {
+            await this.runPeekaboo(['app', 'launch', command, '--wait-until-ready']);
+            return;
+        } catch (peekabooError) {
+            try {
+                await runOpen(command, args);
+                return;
+            } catch (openError) {
+                const peekabooMessage = peekabooError instanceof Error ? peekabooError.message : String(peekabooError);
+                const openMessage = openError instanceof Error ? openError.message : String(openError);
+                throw new Error(`Failed to launch ${command}. Peekaboo: ${peekabooMessage}. open: ${openMessage}`);
+            }
+        }
+    }
+
     private async runPeekabooFirstSuccessful(argSets: string[][]): Promise<PeekabooRunResult> {
         let lastError: unknown;
         for (const args of argSets) {
@@ -296,6 +312,46 @@ export class PeekabooDesktopOperator implements DesktopOperator {
 
         throw lastError instanceof Error ? lastError : new Error(String(lastError));
     }
+}
+
+function runOpen(command: string, args?: string[]): Promise<void> {
+    const openArgs = buildOpenArgs(command, args);
+
+    return new Promise((resolve, reject) => {
+        const child = spawn('open', openArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+        child.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+        child.on('error', (err) => reject(err));
+        child.on('close', (code) => {
+            if (code === 0) {
+                resolve();
+                return;
+            }
+            reject(new Error(`open ${openArgs.join(' ')} failed with code ${code}: ${stderr || stdout}`.trim()));
+        });
+    });
+}
+
+function buildOpenArgs(command: string, args?: string[]): string[] {
+    const trimmed = command.trim();
+    const isLikelyFileOrUrl =
+        /^https?:\/\//i.test(trimmed) ||
+        trimmed.startsWith('/') ||
+        trimmed.startsWith('~/') ||
+        /\.[A-Za-z0-9]{1,8}$/.test(trimmed);
+
+    if (isLikelyFileOrUrl) return [trimmed, ...(args ?? [])];
+    return ['-a', trimmed, ...(args && args.length > 0 ? ['--args', ...args] : [])];
 }
 
 function parseJsonOutput(stdout: string): unknown {

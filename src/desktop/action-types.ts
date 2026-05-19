@@ -20,7 +20,7 @@ export type DesktopAction =
     | ({ type: 'clickCandidate'; id: number; button?: MouseButton } & ActionHint)
     | ({
         type: 'uiClick';
-        /** Window title or substring used to identify the top-level window, e.g. "Notepad", "Outlook", "Word". */
+        /** Window title or substring used to identify the top-level window, e.g. "TextEdit", "Outlook", "Word". */
         windowTitle: string;
         /** Exact control name as exposed by UI Automation (e.g. button or menu item name). */
         controlName: string;
