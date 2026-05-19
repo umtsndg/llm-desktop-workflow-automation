@@ -74,8 +74,8 @@ export function rankRecordedWorkflows(task: string, workflows: LoadedWorkflow[],
 
         // Weighted mix: raw task text and a canonicalized variant are primary,
         // semantic is supportive, overlap guards against TF-IDF weirdness on short strings.
-        // Canonicalization lets similar templates like "open notepad and write ..." reuse
-        // recordings even when the exact text being written differs.
+        // Canonicalization lets similar templates like "open notepad/textedit and write ..."
+        // reuse recordings even when the exact text being written differs.
         const score = 0.45 * taskScore + 0.25 * canonicalTaskScore + 0.2 * semanticScore + 0.1 * overlapScore;
 
         return {
@@ -115,9 +115,13 @@ function buildSemanticText(workflow: RecordedWorkflow): string {
 }
 
 function canonicalizeTaskText(task: string): string {
-    const lower = task.toLowerCase();
+    const lower = task
+        .toLowerCase()
+        .replace(/\bnotepad\b/g, 'plain-text-editor')
+        .replace(/\btext\s*edit\b/g, 'plain-text-editor')
+        .replace(/\btextedit\b/g, 'plain-text-editor');
 
-    // Heuristic: for patterns like "open notepad and write <anything>",
+    // Heuristic: for patterns like "open a plain text editor and write <anything>",
     // treat everything after "write" as a parameter so recordings are reusable.
     const writeMatch = lower.match(/^(.*\bwrite\b)/i);
     if (writeMatch && writeMatch[1]) {

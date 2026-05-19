@@ -1,14 +1,12 @@
 {
   "name": "llm-desktop-workflow-automation",
   "version": "1.0.0",
-  "description": "This project explores LLM-based desktop workflow automation on Windows. Users describe tasks in natural language, which are executed and recorded in a reusable form. Previously recorded workflows are replayed for similar requests, improving reliability and efficiency for repeated desktop tasks.",
+  "description": "This project explores LLM-based desktop workflow automation. Users describe tasks in natural language, which are executed and recorded in a reusable form. Previously recorded workflows are replayed for similar requests, improving reliability and efficiency for repeated desktop tasks.",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx src/test-sort-salary.ts",
+    "dev": "tsx src/cli.ts help",
     "cli": "tsx src/cli.ts",
     "web:server": "tsx src/web/server.ts",
-    "example:notepad-agent": "tsx src/test-llm-loop-excel-chart.ts",
-    "test-sort-salary": "tsx src/test-sort-salary.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

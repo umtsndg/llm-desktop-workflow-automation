@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 
-import { NutJsDesktopOperator } from '../desktop/NutJsDesktopOperator';
+import { createDesktopOperator } from '../desktop/createDesktopOperator';
 import { DesktopActionPlanner } from '../llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from '../llm/IterativeDesktopAgent';
 import { buildLlmClient, normalizeLLMProvider, providerModel, type LLMProvider } from '../llm/llm-provider';
@@ -130,7 +130,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     if (input.mode === 'plan') {
         const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
-        const operator = new NutJsDesktopOperator();
+        const operator = createDesktopOperator();
         const actions = await planner.plan(input.task, operator, { includeScreenshot: input.screenshot === true });
         return {
             ok: true,
@@ -143,7 +143,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     if (input.mode === 'run') {
         const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
-        const baseDesktop = new NutJsDesktopOperator();
+        const baseDesktop = createDesktopOperator();
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
 
@@ -169,7 +169,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     }
 
     if (input.mode === 'loop') {
-        const baseDesktop = new NutJsDesktopOperator();
+        const baseDesktop = createDesktopOperator();
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
 
@@ -199,7 +199,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     const match = bestWorkflowMatch(input.task, workflows, { minScore: threshold });
 
     if (match) {
-        const desktop = new NutJsDesktopOperator();
+        const desktop = createDesktopOperator();
         const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust });
         if (replay.ok) {
             return {
@@ -220,7 +220,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         }
     }
 
-    const baseDesktop = new NutJsDesktopOperator();
+    const baseDesktop = createDesktopOperator();
     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
     const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
 
@@ -399,7 +399,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         text: `🤔 I'll handle this step by step. Let me start working on: "${req.task}"`,
                     };
 
-                    const baseDesktop = new NutJsDesktopOperator();
+                    const baseDesktop = createDesktopOperator();
                     const record = req.record === true;
                     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
 
@@ -467,7 +467,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                     };
 
                     const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
-                    const operator = new NutJsDesktopOperator();
+                    const operator = createDesktopOperator();
                     const actions = await planner.plan(req.task, operator, { includeScreenshot: req.screenshot === true });
 
                     yield {
@@ -499,7 +499,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         text: `🎯 Found a matching workflow (${(match.score * 100).toFixed(0)}% confident). Replaying it now...`,
                     };
 
-                    const desktop = new NutJsDesktopOperator();
+                    const desktop = createDesktopOperator();
                     const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust: req.robust !== false });
 
                     const completeMsg = replay.ok
@@ -527,7 +527,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                     text: '🆕 No matching workflow found. I\'ll handle this fresh using AI-powered automation...',
                 };
 
-                const baseDesktop = new NutJsDesktopOperator();
+                const baseDesktop = createDesktopOperator();
                 const record = req.record !== false;
                 const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
                 const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));

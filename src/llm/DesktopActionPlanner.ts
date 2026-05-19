@@ -134,7 +134,8 @@ function inferExpectedWindowTitle(task: string, launchCommand?: string): string 
     const pptx = task.match(/([A-Za-z0-9 _-]+)\.pptx\b/i) ?? cmd?.match(/([A-Za-z0-9 _-]+)\.pptx\b/i);
     if (pptx?.[1]) return pptx[1];
 
-    if (t.includes('notepad') || cmd?.includes('notepad')) return 'Notepad';
+    if (t.includes('textedit') || t.includes('text edit') || cmd?.includes('textedit')) return 'TextEdit';
+    if (t.includes('notepad') || cmd?.includes('notepad')) return process.platform === 'darwin' ? 'TextEdit' : 'Notepad';
     if (t.includes('excel') || cmd?.includes('excel') || /\.xlsx\b/.test(t) || /\.xlsx\b/.test(cmd ?? '')) return 'Excel';
     if (t.includes('word') || cmd?.includes('winword')) return 'Word';
     if (t.includes('powerpoint') || cmd?.includes('powerpnt')) return 'PowerPoint';
