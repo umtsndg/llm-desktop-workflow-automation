@@ -83,6 +83,7 @@ function applyReplaySafety(steps: RecordedStep[], expectedWindowTitle?: string):
             action,
             result: { ok: true, action, executedAt: new Date().toISOString() },
             semantic: 'Replay safety: focus expected window',
+            source: 'replaySafety',
         });
     }
 
@@ -100,6 +101,7 @@ function applyReplaySafety(steps: RecordedStep[], expectedWindowTitle?: string):
                     action,
                     result: { ok: true, action, executedAt: new Date().toISOString() },
                     semantic: 'Replay safety: wait after launch',
+                    source: 'replaySafety',
                 });
             }
 
@@ -117,6 +119,7 @@ function applyReplaySafety(steps: RecordedStep[], expectedWindowTitle?: string):
                         action,
                         result: { ok: true, action, executedAt: new Date().toISOString() },
                         semantic: 'Replay safety: focus after launch',
+                        source: 'replaySafety',
                     });
                 }
             }

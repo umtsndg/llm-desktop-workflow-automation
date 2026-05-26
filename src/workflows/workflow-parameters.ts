@@ -1,23 +1,16 @@
 import type { DesktopAction } from '../desktop/action-types';
 
 import type { RecordedUiTarget, RecordedWorkflow } from './recorded-workflow';
-
-type DesktopPlatform = NodeJS.Platform;
-
-type KnownApp =
-    | 'browser'
-    | 'calculator'
-    | 'chrome'
-    | 'cmd'
-    | 'edge'
-    | 'excel'
-    | 'notepad'
-    | 'outlook'
-    | 'powerpoint'
-    | 'terminal'
-    | 'textedit'
-    | 'word'
-    | 'vscode';
+import {
+    commandForApp,
+    detectAppFromLaunchCommand,
+    detectPrimaryApp,
+    inferExpectedWindowTitle,
+    shouldReplaceLaunchCommand,
+    shouldReplaceWindowTitle,
+    type DesktopPlatform,
+    type KnownApp,
+} from './workflow-intent';
 
 export type ParameterizationChange = {
     stepIndex: number;
@@ -45,6 +38,11 @@ export function parameterizeWorkflowForTask(
     options?: { platform?: DesktopPlatform }
 ): ParameterizationResult {
     const platform = options?.platform ?? process.platform;
+
+    if (workflow.parameters && workflow.parameters.length > 0) {
+        return parameterizeFromExplicitParameters(workflow, task, platform);
+    }
+
     const originalTask = workflow.task;
     const changes: ParameterizationChange[] = [];
 
@@ -97,6 +95,123 @@ export function parameterizeWorkflowForTask(
         },
         changes,
     };
+}
+
+function parameterizeFromExplicitParameters(workflow: RecordedWorkflow, task: string, platform: DesktopPlatform): ParameterizationResult {
+    const changes: ParameterizationChange[] = [];
+    let steps = workflow.steps;
+    let expectedWindowTitle = workflow.expectedWindowTitle;
+
+    for (const parameter of workflow.parameters ?? []) {
+        const inferred = inferReplacementValue(workflow.task, parameter.originalValue, task);
+        const nextValue = inferred ? normalizeExplicitParameterValue(parameter.kind, inferred, task, platform) : null;
+        if (!nextValue || stringEqualsLoose(nextValue, parameter.originalValue)) continue;
+
+        for (const ref of parameter.usedBy) {
+            if (ref.stepIndex === -1 && ref.field === 'expectedWindowTitle') {
+                if (expectedWindowTitle && expectedWindowTitle !== nextValue) {
+                    changes.push({ stepIndex: -1, field: 'expectedWindowTitle', from: expectedWindowTitle, to: nextValue });
+                    expectedWindowTitle = nextValue;
+                }
+                continue;
+            }
+
+            steps = steps.map((step) => {
+                if (step.index !== ref.stepIndex) return step;
+                const updated = setStepField(step, ref.field, nextValue);
+                if (updated === step) return step;
+                const from = valueAtStepField(step, ref.field);
+                if (from && from !== nextValue && isParameterizationField(ref.field)) {
+                    changes.push({
+                        stepIndex: step.index,
+                        field: ref.field.startsWith('launchApp.args.') ? 'launchApp.args' : ref.field,
+                        from,
+                        to: nextValue,
+                    });
+                }
+                return updated;
+            });
+        }
+    }
+
+    return {
+        workflow: changes.length > 0 ? { ...workflow, expectedWindowTitle, steps } : workflow,
+        changes,
+    };
+}
+
+function normalizeExplicitParameterValue(
+    kind: NonNullable<RecordedWorkflow['parameters']>[number]['kind'],
+    value: string,
+    task: string,
+    platform: DesktopPlatform
+): string {
+    if (kind === 'app') {
+        const app = detectPrimaryApp(value) ?? detectPrimaryApp(task);
+        return app ? commandForApp(app, platform) : value;
+    }
+
+    if (kind === 'window') {
+        const app = detectPrimaryApp(value) ?? detectPrimaryApp(task);
+        return app ? inferExpectedWindowTitle(task, app, platform) ?? value : value;
+    }
+
+    return value;
+}
+
+function setStepField(step: RecordedWorkflow['steps'][number], field: string, value: string): RecordedWorkflow['steps'][number] {
+    if (field === 'typeText.text' && step.action.type === 'typeText') {
+        const action = { ...step.action, text: value };
+        return { ...step, action, result: { ...step.result, action }, semantic: updateSemantic(step.semantic, action) };
+    }
+    if (field === 'launchApp.command' && step.action.type === 'launchApp') {
+        const action = { ...step.action, command: value };
+        return { ...step, action, result: { ...step.result, action }, semantic: updateSemantic(step.semantic, action) };
+    }
+    if (field.startsWith('launchApp.args.') && step.action.type === 'launchApp') {
+        const idx = Number(field.slice('launchApp.args.'.length));
+        if (!Number.isInteger(idx) || idx < 0 || !step.action.args || idx >= step.action.args.length) return step;
+        const args = [...step.action.args];
+        args[idx] = value;
+        const action = { ...step.action, args };
+        return { ...step, action, result: { ...step.result, action }, semantic: updateSemantic(step.semantic, action) };
+    }
+    if (field === 'focusWindow.title' && step.action.type === 'focusWindow') {
+        const action = { ...step.action, title: value };
+        return { ...step, action, result: { ...step.result, action }, semantic: updateSemantic(step.semantic, action) };
+    }
+    if (field === 'uiTarget.windowTitle' && step.uiTarget) return { ...step, uiTarget: { ...step.uiTarget, windowTitle: value } };
+    if (field === 'uiTarget.query' && step.uiTarget) return { ...step, uiTarget: { ...step.uiTarget, query: value } };
+    if (field === 'uiTarget.text' && step.uiTarget) return { ...step, uiTarget: { ...step.uiTarget, text: value } };
+    return step;
+}
+
+function valueAtStepField(step: RecordedWorkflow['steps'][number], field: string): string | undefined {
+    if (field === 'typeText.text' && step.action.type === 'typeText') return step.action.text;
+    if (field === 'launchApp.command' && step.action.type === 'launchApp') return step.action.command;
+    if (field.startsWith('launchApp.args.') && step.action.type === 'launchApp') {
+        const idx = Number(field.slice('launchApp.args.'.length));
+        return Number.isInteger(idx) && idx >= 0 ? step.action.args?.[idx] : undefined;
+    }
+    if (field === 'focusWindow.title' && step.action.type === 'focusWindow') return step.action.title;
+    if (field === 'uiTarget.windowTitle') return step.uiTarget?.windowTitle;
+    if (field === 'uiTarget.query') return step.uiTarget?.query;
+    if (field === 'uiTarget.text') return step.uiTarget?.text;
+    return undefined;
+}
+
+function isParameterizationField(field: string): field is ParameterizationChange['field'] {
+    return (
+        field === 'typeText.text' ||
+        field === 'launchApp.command' ||
+        field === 'launchApp.args' ||
+        field.startsWith('launchApp.args.') ||
+        field === 'focusWindow.title' ||
+        field === 'expectedWindowTitle' ||
+        field === 'uiTarget.windowTitle' ||
+        field === 'uiTarget.query' ||
+        field === 'uiTarget.text'
+    );
 }
 
 function parameterizeUiTarget(
@@ -217,7 +332,7 @@ function parameterizeAction(
             return { ...action, title: input.windowTitle };
         }
 
-        if (!isGenericAppTitle(action.title)) {
+        if (!detectAppFromLaunchCommand(action.title)) {
             const nextTitle = inferReplacementValue(input.originalTask, action.title, input.task);
             if (nextTitle && nextTitle !== action.title) {
                 input.changes.push({
@@ -234,7 +349,7 @@ function parameterizeAction(
     return action;
 }
 
-function inferReplacementValue(originalTask: string, originalValue: string, newTask: string): string | null {
+export function inferReplacementValue(originalTask: string, originalValue: string, newTask: string): string | null {
     const value = originalValue.trim();
     if (!value) return null;
 
@@ -347,123 +462,12 @@ function extractQuotedSpans(input: string): string[] {
     return out;
 }
 
-function detectPrimaryApp(task: string): KnownApp | null {
-    const t = task.toLowerCase();
-
-    const checks: Array<[KnownApp, RegExp]> = [
-        ['textedit', /\btext\s*edit\b|\btextedit\b/],
-        ['notepad', /\bnotepad\b|\bplain\s+text\s+editor\b/],
-        ['chrome', /\bgoogle\s+chrome\b|\bchrome\b/],
-        ['edge', /\bmicrosoft\s+edge\b|\bedge\b/],
-        ['outlook', /\boutlook\b|\be-?mail\b|\bmail\b/],
-        ['excel', /\bexcel\b|\.xlsx\b/],
-        ['word', /\bword\b|\.docx\b/],
-        ['powerpoint', /\bpower\s*point\b|\bpowerpoint\b|\.pptx\b/],
-        ['vscode', /\bvisual\s+studio\s+code\b|\bvs\s*code\b|\bvscode\b/],
-        ['calculator', /\bcalculator\b|\bcalc\b/],
-        ['cmd', /\bcommand\s+prompt\b|\bcmd(?:\.exe)?\b/],
-        ['terminal', /\bterminal\b|\biterm\b/],
-        ['browser', /\bbrowser\b|\bwebsite\b|https?:\/\//],
-    ];
-
-    for (const [app, pattern] of checks) {
-        if (pattern.test(t)) return app;
-    }
-
-    return null;
-}
-
-function detectAppFromLaunchCommand(command: string): KnownApp | null {
-    const c = command.toLowerCase();
-    if (/\btext\s*edit\b|\btextedit\b/.test(c)) return 'textedit';
-    if (/\bnotepad(?:\.exe)?\b/.test(c)) return 'notepad';
-    if (/\bgoogle\s+chrome\b|\bchrome(?:\.exe)?\b/.test(c)) return 'chrome';
-    if (/\bmicrosoft\s+edge\b|\bmsedge(?:\.exe)?\b|\bedge\b/.test(c)) return 'edge';
-    if (/\boutlook(?:\.exe)?\b|\bmicrosoft\s+outlook\b/.test(c)) return 'outlook';
-    if (/\bexcel(?:\.exe)?\b|\bmicrosoft\s+excel\b/.test(c)) return 'excel';
-    if (/\bwinword(?:\.exe)?\b|\bmicrosoft\s+word\b|\bword\b/.test(c)) return 'word';
-    if (/\bpowerpnt(?:\.exe)?\b|\bmicrosoft\s+powerpoint\b|\bpowerpoint\b/.test(c)) return 'powerpoint';
-    if (/\bcode(?:\.exe)?\b|\bvisual\s+studio\s+code\b/.test(c)) return 'vscode';
-    if (/\bcalc(?:\.exe)?\b|\bcalculator\b/.test(c)) return 'calculator';
-    if (/\bcmd(?:\.exe)?\b|\bcommand\s+prompt\b/.test(c)) return 'cmd';
-    if (/\bterminal\b|\biterm\b/.test(c)) return 'terminal';
-    if (/\bbrowser\b/.test(c)) return 'browser';
-    return null;
-}
-
-function shouldReplaceLaunchCommand(
-    command: string,
-    recordedApp: KnownApp | null,
-    preferredApp: KnownApp | null,
-    platform: DesktopPlatform
-): boolean {
-    if (!preferredApp) return false;
-    if (recordedApp) return recordedApp !== preferredApp || commandForApp(recordedApp, platform) !== command;
-    return false;
-}
-
-function shouldReplaceWindowTitle(title: string, task: string, preferredApp: KnownApp | null): boolean {
-    if (!preferredApp) return false;
-    if (containsDocumentName(title)) return Boolean(extractDocumentTitle(task));
-    return detectAppFromLaunchCommand(title) !== null || isGenericAppTitle(title);
-}
-
-function inferExpectedWindowTitle(task: string, app: KnownApp | null, platform: DesktopPlatform): string | null {
-    const documentTitle = extractDocumentTitle(task);
-    if (documentTitle) return documentTitle;
-    if (!app) return null;
-    return windowTitleForApp(app, platform);
-}
-
-function extractDocumentTitle(task: string): string | null {
-    const m = task.match(/([A-Za-z0-9 _.-]+)\.(xlsx|docx|pptx|txt|pdf)\b/i);
-    if (!m?.[1]) return null;
-    return m[1].trim();
-}
-
-function commandForApp(app: KnownApp, platform: DesktopPlatform): string {
-    const mac = platform === 'darwin';
-    const map: Record<KnownApp, string> = {
-        browser: mac ? 'Safari' : 'Microsoft Edge',
-        calculator: 'Calculator',
-        chrome: mac ? 'Google Chrome' : 'Google Chrome',
-        cmd: mac ? 'Terminal' : 'Command Prompt',
-        edge: 'Microsoft Edge',
-        excel: mac ? 'Microsoft Excel' : 'Excel',
-        notepad: mac ? 'TextEdit' : 'Notepad',
-        outlook: mac ? 'Microsoft Outlook' : 'Outlook',
-        powerpoint: mac ? 'Microsoft PowerPoint' : 'PowerPoint',
-        terminal: mac ? 'Terminal' : 'Command Prompt',
-        textedit: mac ? 'TextEdit' : 'Notepad',
-        word: mac ? 'Microsoft Word' : 'Word',
-        vscode: 'Visual Studio Code',
-    };
-    return map[app];
-}
-
-function windowTitleForApp(app: KnownApp, platform: DesktopPlatform): string {
-    const command = commandForApp(app, platform);
-    if (platform === 'darwin' && command.startsWith('Microsoft ')) {
-        return command.replace(/^Microsoft\s+/, '');
-    }
-    if (app === 'cmd' && platform !== 'darwin') return 'Command Prompt';
-    return command;
-}
-
 function updateSemantic(semantic: string | undefined, action: DesktopAction): string | undefined {
     if (!semantic) return semantic;
     if (action.type === 'typeText') return `Type text (${action.text.length} chars)`;
     if (action.type === 'launchApp') return `Launch app: ${action.command}`;
     if (action.type === 'focusWindow') return `Focus window: ${action.title}`;
     return semantic;
-}
-
-function containsDocumentName(title: string): boolean {
-    return /\.(xlsx|docx|pptx|txt|pdf)\b/i.test(title);
-}
-
-function isGenericAppTitle(title: string): boolean {
-    return detectAppFromLaunchCommand(title) !== null;
 }
 
 function indexOfLoose(input: string, needle: string): number {

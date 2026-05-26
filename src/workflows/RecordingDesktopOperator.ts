@@ -3,6 +3,7 @@ import type { DesktopAction, ExecutionResult } from '../desktop/action-types';
 import { isUiCandidateProvider, type ListUiCandidatesOptions, type UiCandidate } from '../desktop/ui-candidates';
 
 import type { RecordedStep, RecordedUiTarget, RecordedWorkflow } from './recorded-workflow';
+import { finalizeRecordedWorkflow } from './finalize-recorded-workflow';
 
 export type RecordingOptions = {
     task: string;
@@ -99,7 +100,7 @@ export class RecordingDesktopOperator implements DesktopOperator {
 
     finish(ok: boolean): RecordedWorkflow {
         this.endedAt = new Date().toISOString();
-        return {
+        return finalizeRecordedWorkflow({
             version: 1,
             task: this.options.task,
             ok,
@@ -107,7 +108,7 @@ export class RecordingDesktopOperator implements DesktopOperator {
             endedAt: this.endedAt,
             expectedWindowTitle: this.options.expectedWindowTitle,
             steps: this.steps,
-        };
+        });
     }
 
     private buildRecordedStep(action: DesktopAction, result: ExecutionResult, uiTarget?: RecordedUiTarget): RecordedStep {
