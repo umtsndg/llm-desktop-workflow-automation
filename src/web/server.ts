@@ -200,7 +200,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     if (match) {
         const desktop = createDesktopOperator();
-        const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust });
+        const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust, task: input.task });
         if (replay.ok) {
             return {
                 ok: true,
@@ -500,7 +500,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                     };
 
                     const desktop = createDesktopOperator();
-                    const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust: req.robust !== false });
+                    const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust: req.robust !== false, task: req.task });
 
                     const completeMsg = replay.ok
                         ? '✅ Done! I replayed a previous workflow that matched your request.'

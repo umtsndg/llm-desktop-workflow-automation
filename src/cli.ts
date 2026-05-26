@@ -317,7 +317,7 @@ async function main() {
 
         if (match) {
             const desktop = createDesktopOperator();
-            const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust });
+            const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust, task });
             if (replayResult.ok) {
                 console.log(
                     JSON.stringify(

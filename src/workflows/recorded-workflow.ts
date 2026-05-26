@@ -3,6 +3,18 @@ import type { DesktopAction, ExecutionResult } from '../desktop/action-types';
 export type Point = { x: number; y: number };
 export type NormalizedPoint = { x: number; y: number }; // 0..1
 
+export type RecordedUiTarget = {
+    windowTitle?: string;
+    query?: string;
+    text?: string;
+    role?: string;
+    automationId?: string;
+    className?: string;
+    controlType?: string;
+    typeable?: boolean;
+    clickable?: boolean;
+};
+
 export type RecordedStep = {
     index: number;
     action: DesktopAction;
@@ -22,6 +34,10 @@ export type RecordedStep = {
             screenHeight: number;
         };
     };
+
+    // Semantic selector for click replay. Prefer re-resolving this target over
+    // replaying coordinates, and use coordinates only as a fallback.
+    uiTarget?: RecordedUiTarget;
 };
 
 export type RecordedWorkflow = {
