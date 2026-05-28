@@ -21,6 +21,17 @@ import type {
 import type { DesktopOperator } from './DesktopOperator';
 import type { ListUiCandidatesOptions, UiCandidate } from './ui-candidates';
 
+class PowerShellExecutionError extends Error {
+    constructor(
+        message: string,
+        readonly exitCode: number | null,
+        readonly stderr: string
+    ) {
+        super(message);
+        this.name = 'PowerShellExecutionError';
+    }
+}
+
 const buttonMap: Record<MouseButton, Button> = {
     left: Button.LEFT,
     right: Button.RIGHT,
@@ -128,7 +139,11 @@ export class NutJsDesktopOperator implements DesktopOperator {
         const output = await runPowerShell(script).catch((err) => {
             const msg = err instanceof Error ? err.message : String(err);
             try {
-                console.error('[Desktop][UIAutomation] Candidates PowerShell error:', msg);
+                if (err instanceof PowerShellExecutionError && err.exitCode === 2) {
+                    console.error(`[Desktop][UIAutomation] Candidates window not found: ${JSON.stringify(options.windowTitle)}`);
+                } else {
+                    console.error('[Desktop][UIAutomation] Candidates PowerShell error:', msg);
+                }
             } catch {
                 // ignore logging issues
             }
@@ -498,7 +513,11 @@ export class NutJsDesktopOperator implements DesktopOperator {
         );
 
         const output = await runPowerShell(script).catch((err) => {
-            console.error('[Desktop][UIAutomation] PowerShell error:', err instanceof Error ? err.message : String(err));
+            if (err instanceof PowerShellExecutionError && err.exitCode === 2) {
+                console.error('[Desktop][UIAutomation] UI element not found.');
+            } else {
+                console.error('[Desktop][UIAutomation] PowerShell error:', err instanceof Error ? err.message : String(err));
+            }
             return '';
         });
 
@@ -1370,7 +1389,9 @@ function runPowerShell(script: string): Promise<string> {
             if (code === 0) {
                 resolve(stdout);
             } else {
-                reject(new Error(stderr || `PowerShell exited with code ${code}`));
+                const exitCode = typeof code === 'number' ? code : null;
+                const message = stderr.trim() || `PowerShell exited with code ${exitCode ?? 'unknown'}`;
+                reject(new PowerShellExecutionError(message, exitCode, stderr));
             }
         });
     });

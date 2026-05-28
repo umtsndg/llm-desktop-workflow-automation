@@ -5,7 +5,14 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { createDesktopOperator } from '../desktop/createDesktopOperator';
 import { DesktopActionPlanner } from '../llm/DesktopActionPlanner';
 import { IterativeDesktopAgent } from '../llm/IterativeDesktopAgent';
-import { buildLlmClient, normalizeLLMProvider, providerModel, type LLMProvider } from '../llm/llm-provider';
+import {
+    buildLlmClient,
+    normalizeLLMModel,
+    normalizeLLMProvider,
+    providerModel,
+    providerModelOptions,
+    type LLMProvider,
+} from '../llm/llm-provider';
 import { RecordingDesktopOperator } from '../workflows/RecordingDesktopOperator';
 import { replayRecordedWorkflow } from '../workflows/replay';
 import { buildReplayPreview, formatReplayPreview } from '../workflows/replay-preview';
@@ -21,6 +28,7 @@ type ExecuteRequest = {
     task: string;
     mode: ExecuteMode;
     provider?: LLMProvider;
+    model?: string;
     maxIterations?: number;
     threshold?: number;
     robust?: boolean;
@@ -29,7 +37,7 @@ type ExecuteRequest = {
     showLlm?: boolean;
 };
 
-let activeRun: { id: string; task: string; mode: ExecuteMode; startedAt: string } | null = null;
+let activeRun: { id: string; task: string; mode: ExecuteMode; provider: LLMProvider; model: string; startedAt: string } | null = null;
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, {
@@ -80,6 +88,7 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
         task,
         mode: mode as ExecuteMode,
         provider: normalizeLLMProvider(obj.provider),
+        model: normalizeLLMModel((obj as { model?: unknown }).model),
         maxIterations: Number.isFinite(Number(obj.maxIterations)) ? Number(obj.maxIterations) : undefined,
         threshold: Number.isFinite(Number(obj.threshold)) ? Number(obj.threshold) : undefined,
         robust: typeof obj.robust === 'boolean' ? obj.robust : undefined,
@@ -89,14 +98,15 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
     };
 }
 
-function buildProviderLlm(showLlm: boolean, provider?: LLMProvider) {
-    return buildLlmClient({ provider, showLlm });
+function buildProviderLlm(showLlm: boolean, provider?: LLMProvider, model?: string) {
+    return buildLlmClient({ provider, model, showLlm });
 }
 
 async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     const threshold = Number.isFinite(input.threshold) ? (input.threshold as number) : 0.55;
     const showLlm = input.showLlm === true;
     const provider = input.provider ?? normalizeLLMProvider(undefined);
+    const model = input.model ?? providerModel(provider);
 
     if (input.mode === 'match') {
         const workflows = await loadRecordedWorkflows();
@@ -107,6 +117,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
             ok: true,
             mode: input.mode,
             provider,
+            model,
             task: input.task,
             recordingsFound: workflows.length,
             threshold,
@@ -133,20 +144,21 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     }
 
     if (input.mode === 'plan') {
-        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
+        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider, model));
         const operator = createDesktopOperator();
         const actions = await planner.plan(input.task, operator, { includeScreenshot: input.screenshot === true });
         return {
             ok: true,
             mode: input.mode,
             provider,
+            model,
             task: input.task,
             actions,
         };
     }
 
     if (input.mode === 'run') {
-        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
+        const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider, model));
         const baseDesktop = createDesktopOperator();
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
@@ -165,6 +177,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
             ok,
             mode: input.mode,
             provider,
+            model,
             task: input.task,
             actions,
             results,
@@ -177,7 +190,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         const record = input.record === true;
         const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
 
-        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
         const out = await agent.run(input.task, executor, {
             maxIterations: Number.isFinite(input.maxIterations as number) ? (input.maxIterations as number) : undefined,
         });
@@ -192,6 +205,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
             ...out,
             mode: input.mode,
             provider,
+            model,
             task: input.task,
             recordingPath,
         };
@@ -211,6 +225,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                 ok: true,
                 mode: input.mode,
                 provider,
+                model,
                 task: input.task,
                 reused: true,
                 match: {
@@ -226,7 +241,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         }
 
         const executor = record ? new RecordingDesktopOperator(desktop, { task: input.task }) : desktop;
-        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
         const lastReplayResult = replay.results[replay.results.length - 1];
         const repairTask = buildRepairTask(input.task, replay.failedStepIndex, lastReplayResult?.error);
         const repair = await agent.run(repairTask, executor, {
@@ -243,6 +258,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
             ok: repair.ok,
             mode: input.mode,
             provider,
+            model,
             task: input.task,
             reused: true,
             repaired: true,
@@ -262,7 +278,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     const baseDesktop = createDesktopOperator();
     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: input.task }) : baseDesktop;
-    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
 
     const out = await agent.run(input.task, executor, {
         maxIterations: Number.isFinite(input.maxIterations as number) ? (input.maxIterations as number) : undefined,
@@ -278,6 +294,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         ok: out.ok,
         mode: input.mode,
         provider,
+        model,
         task: input.task,
         reused: false,
         fallback: true,
@@ -332,12 +349,18 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
     const url = new URL(req.url, 'http://localhost');
 
     if (req.method === 'GET' && url.pathname === '/api/health') {
+        const provider = normalizeLLMProvider(undefined);
         sendJson(res, 200, {
             ok: true,
             busy: activeRun !== null,
             activeRun,
-            provider: normalizeLLMProvider(undefined),
-            model: providerModel(normalizeLLMProvider(undefined)),
+            provider,
+            model: providerModel(provider),
+            models: {
+                openai: providerModelOptions('openai'),
+                gemini: providerModelOptions('gemini'),
+                claude: providerModelOptions('claude'),
+            },
         });
         return true;
     }
@@ -377,6 +400,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 id: runId,
                 task: input.task,
                 mode: input.mode,
+                provider: input.provider ?? normalizeLLMProvider(undefined),
+                model: input.model ?? providerModel(input.provider ?? normalizeLLMProvider(undefined)),
                 startedAt: new Date().toISOString(),
             };
 
@@ -390,6 +415,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 const threshold = Number.isFinite(req.threshold) ? (req.threshold as number) : 0.55;
                 const showLlm = req.showLlm === true;
                 const provider = req.provider ?? normalizeLLMProvider(undefined);
+                const model = req.model ?? providerModel(provider);
 
                 function humanizeAction(log: string): string | null {
                     // Parse "Last action before iteration N: {...}"
@@ -441,7 +467,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                     const record = req.record === true;
                     const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
 
-                    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+                    const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
 
                     // Override console.error to capture logs
                     const originalError = console.error;
@@ -488,6 +514,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                                 ...out,
                                 mode: req.mode,
                                 provider,
+                                model,
                                 task: req.task,
                                 recordingPath,
                             },
@@ -504,7 +531,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         text: '📋 Let me create an action plan for you...',
                     };
 
-                    const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider));
+                    const planner = new DesktopActionPlanner(buildProviderLlm(showLlm, provider, model));
                     const operator = createDesktopOperator();
                     const actions = await planner.plan(req.task, operator, { includeScreenshot: req.screenshot === true });
 
@@ -515,6 +542,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                             ok: true,
                             mode: req.mode,
                             provider,
+                            model,
                             task: req.task,
                             actions,
                         },
@@ -550,7 +578,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
 
                         const shouldRecordRepair = req.record !== false;
                         const repairExecutor = shouldRecordRepair ? new RecordingDesktopOperator(repairDesktop, { task: req.task }) : repairDesktop;
-                        const repairAgent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+                        const repairAgent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
                         const repairOut = await repairAgent.run(
                             buildRepairTask(req.task, replayAttempt.failedStepIndex, replayAttempt.results[replayAttempt.results.length - 1]?.error),
                             repairExecutor,
@@ -572,6 +600,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                                 ok: repairOut.ok,
                                 mode: req.mode,
                                 provider,
+                                model,
                                 task: req.task,
                                 reused: true,
                                 repaired: true,
@@ -592,6 +621,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                             ok: true,
                             mode: req.mode,
                             provider,
+                            model,
                             task: req.task,
                             reused: true,
                             match,
@@ -611,7 +641,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 const baseDesktop = createDesktopOperator();
                 const record = req.record !== false;
                 const executor = record ? new RecordingDesktopOperator(baseDesktop, { task: req.task }) : baseDesktop;
-                const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+                const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider, model));
 
                 // Capture logs
                 const originalError = console.error;
@@ -658,6 +688,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                             ok: out.ok,
                             mode: req.mode,
                             provider,
+                            model,
                             task: req.task,
                             reused: false,
                             recordingPath,
@@ -687,7 +718,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             return true;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            const status = /OPENAI_API_KEY|GEMINI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
+            const status = /OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
             sendJson(res, status, { ok: false, error: message });
             return true;
         }
@@ -712,6 +743,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 id: runId,
                 task: input.task,
                 mode: input.mode,
+                provider: input.provider ?? normalizeLLMProvider(undefined),
+                model: input.model ?? providerModel(input.provider ?? normalizeLLMProvider(undefined)),
                 startedAt: new Date().toISOString(),
             };
 
@@ -729,7 +762,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             return true;
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            const status = /OPENAI_API_KEY|GEMINI_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
+            const status = /OPENAI_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|Missing environment variable/.test(message) ? 400 : 500;
             sendJson(res, status, { ok: false, error: message });
             return true;
         } finally {

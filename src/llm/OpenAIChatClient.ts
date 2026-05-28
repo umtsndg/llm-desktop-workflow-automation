@@ -43,17 +43,21 @@ export class OpenAIChatClient implements LLMChatClient {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 const model = hasImageInput(messages) ? this.visionModel : this.model;
+                const requestBody: Record<string, unknown> = {
+                    model,
+                    messages,
+                };
+                if (shouldSendTemperature(this.providerName, model)) {
+                    requestBody.temperature = this.temperature;
+                }
+
                 const res = await fetch(`${this.baseUrl}${this.chatCompletionsPath}`, {
                     method: 'POST',
                     headers: {
                         'content-type': 'application/json',
                         authorization: `Bearer ${this.apiKey}`,
                     },
-                    body: JSON.stringify({
-                        model,
-                        temperature: this.temperature,
-                        messages,
-                    }),
+                    body: JSON.stringify(requestBody),
                 });
 
                 if (!res.ok) {
@@ -112,6 +116,11 @@ function hasImageInput(messages: LLMMessage[]): boolean {
         if (m.content.some((p) => p.type === 'image_url')) return true;
     }
     return false;
+}
+
+function shouldSendTemperature(providerName: string, model: string): boolean {
+    if (providerName !== 'OpenAI') return true;
+    return !/^gpt-5(?:[.-]|$)/i.test(model.trim());
 }
 
 function sleep(ms: number): Promise<void> {

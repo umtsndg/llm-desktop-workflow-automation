@@ -47,7 +47,18 @@
                             <select id="provider">
                                 <option value="openai" selected>OpenAI</option>
                                 <option value="gemini">Gemini</option>
+                                <option value="claude">Claude</option>
                             </select>
+                        </label>
+
+                        <label class="option">
+                            <span>Model</span>
+                            <select id="model"></select>
+                        </label>
+
+                        <label class="option custom-model-option" id="custom-model-wrap" hidden>
+                            <span>Custom Model</span>
+                            <input id="custom-model" type="text" placeholder="provider model id" />
                         </label>
 
                         <label class="option">

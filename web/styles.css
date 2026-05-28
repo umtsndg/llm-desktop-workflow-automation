@@ -333,6 +333,7 @@ body {
 }
 
 .option input[type="number"],
+.option input[type="text"],
 .option select {
     font: inherit;
     padding: 0.4rem;
