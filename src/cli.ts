@@ -7,6 +7,7 @@ import { buildLlmClient, normalizeLLMProvider, providerApiKeyEnv, type LLMProvid
 import { RecordingDesktopOperator } from './workflows/RecordingDesktopOperator';
 import type { RecordedWorkflow } from './workflows/recorded-workflow';
 import { replayRecordedWorkflow } from './workflows/replay';
+import { buildReplayPreview } from './workflows/replay-preview';
 import { saveRecordedWorkflow } from './workflows/workflow-store';
 import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from './workflows/retrieval';
 
@@ -211,6 +212,7 @@ async function main() {
                             details: best.details,
                             workflowTask: best.workflow.task,
                             endedAt: best.workflow.endedAt,
+                            preview: buildReplayPreview(task, best),
                         }
                         : null,
                     top: ranked.map((m) => ({
@@ -219,6 +221,7 @@ async function main() {
                         details: m.details,
                         workflowTask: m.workflow.task,
                         endedAt: m.workflow.endedAt,
+                        preview: buildReplayPreview(task, m),
                     })),
                 },
                 null,
@@ -316,8 +319,9 @@ async function main() {
         const match = bestWorkflowMatch(task, workflows, { minScore: Number.isFinite(threshold) ? threshold : 0.55 });
 
         if (match) {
+            const preview = buildReplayPreview(task, match);
             const desktop = createDesktopOperator();
-            const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust });
+            const replayResult = await replayRecordedWorkflow(desktop, match.workflow, { robust, task });
             if (replayResult.ok) {
                 console.log(
                     JSON.stringify(
@@ -330,6 +334,7 @@ async function main() {
                                 details: match.details,
                                 workflowTask: match.workflow.task,
                                 endedAt: match.workflow.endedAt,
+                                preview,
                             },
                             replay: replayResult,
                         },
@@ -339,6 +344,46 @@ async function main() {
                 );
                 return;
             }
+
+            const showLlm = Boolean(flags.showLlm || flags['show-llm']);
+            const llm = buildLlmClient({ provider, showLlm });
+            const executor = record ? new RecordingDesktopOperator(desktop, { task }) : desktop;
+            const agent = new IterativeDesktopAgent(llm);
+            const maxIterations = typeof flags.maxIterations === 'string' ? Number(flags.maxIterations) : undefined;
+            const lastReplayResult = replayResult.results[replayResult.results.length - 1];
+            const repair = await agent.run(buildRepairTask(task, replayResult.failedStepIndex, lastReplayResult?.error), executor, {
+                maxIterations: Number.isFinite(maxIterations as number) ? (maxIterations as number) : undefined,
+            });
+
+            let recordingPath: string | undefined;
+            if (repair.ok && executor instanceof RecordingDesktopOperator) {
+                const workflow = executor.finish(true);
+                recordingPath = await saveRecordedWorkflow(workflow);
+            }
+
+            console.log(
+                JSON.stringify(
+                    {
+                        ok: repair.ok,
+                        reused: true,
+                        repaired: true,
+                        match: {
+                            path: match.path,
+                            score: match.score,
+                            details: match.details,
+                            workflowTask: match.workflow.task,
+                            endedAt: match.workflow.endedAt,
+                            preview,
+                        },
+                        replay: replayResult,
+                        repair,
+                        recordingPath,
+                    },
+                    null,
+                    2
+                )
+            );
+            return;
         }
 
         // Fallback to LLM loop (repair/update), then optionally store the improved execution.
@@ -367,15 +412,7 @@ async function main() {
                     ok: out.ok,
                     reused: false,
                     fallback: true,
-                    match: match
-                        ? {
-                            path: match.path,
-                            score: match.score,
-                            details: match.details,
-                            workflowTask: match.workflow.task,
-                            endedAt: match.workflow.endedAt,
-                        }
-                        : null,
+                    match: null,
                     recordingPath,
                     result: out,
                 },
@@ -387,6 +424,12 @@ async function main() {
     }
 
     throw new Error(`Unknown command: ${cmd}`);
+}
+
+function buildRepairTask(task: string, failedStepIndex?: number, error?: string): string {
+    const where = typeof failedStepIndex === 'number' ? ` at recorded step ${failedStepIndex}` : '';
+    const why = error ? ` Error: ${error}` : '';
+    return `Continue and complete this task after a reusable workflow replay failed${where}.${why}\nOriginal task: ${task}`;
 }
 
 main().catch((err) => {

@@ -8,6 +8,7 @@ import { IterativeDesktopAgent } from '../llm/IterativeDesktopAgent';
 import { buildLlmClient, normalizeLLMProvider, providerModel, type LLMProvider } from '../llm/llm-provider';
 import { RecordingDesktopOperator } from '../workflows/RecordingDesktopOperator';
 import { replayRecordedWorkflow } from '../workflows/replay';
+import { buildReplayPreview, formatReplayPreview } from '../workflows/replay-preview';
 import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from '../workflows/retrieval';
 import { saveRecordedWorkflow } from '../workflows/workflow-store';
 
@@ -101,6 +102,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         const workflows = await loadRecordedWorkflows();
         const ranked = rankRecordedWorkflows(input.task, workflows, { limit: 5 });
         const best = ranked[0] ?? null;
+        const bestPreview = best ? buildReplayPreview(input.task, best) : null;
         return {
             ok: true,
             mode: input.mode,
@@ -116,6 +118,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                     details: best.details,
                     workflowTask: best.workflow.task,
                     endedAt: best.workflow.endedAt,
+                    preview: bestPreview,
                 }
                 : null,
             top: ranked.map((m) => ({
@@ -124,6 +127,7 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                 details: m.details,
                 workflowTask: m.workflow.task,
                 endedAt: m.workflow.endedAt,
+                preview: buildReplayPreview(input.task, m),
             })),
         };
     }
@@ -200,7 +204,8 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
 
     if (match) {
         const desktop = createDesktopOperator();
-        const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust });
+        const preview = buildReplayPreview(input.task, match);
+        const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust, task: input.task });
         if (replay.ok) {
             return {
                 ok: true,
@@ -214,10 +219,45 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                     details: match.details,
                     workflowTask: match.workflow.task,
                     endedAt: match.workflow.endedAt,
+                    preview,
                 },
                 replay,
             };
         }
+
+        const executor = record ? new RecordingDesktopOperator(desktop, { task: input.task }) : desktop;
+        const agent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+        const lastReplayResult = replay.results[replay.results.length - 1];
+        const repairTask = buildRepairTask(input.task, replay.failedStepIndex, lastReplayResult?.error);
+        const repair = await agent.run(repairTask, executor, {
+            maxIterations: Number.isFinite(input.maxIterations as number) ? (input.maxIterations as number) : undefined,
+        });
+
+        let recordingPath: string | undefined;
+        if (repair.ok && executor instanceof RecordingDesktopOperator) {
+            const workflow = executor.finish(true);
+            recordingPath = await saveRecordedWorkflow(workflow);
+        }
+
+        return {
+            ok: repair.ok,
+            mode: input.mode,
+            provider,
+            task: input.task,
+            reused: true,
+            repaired: true,
+            match: {
+                path: match.path,
+                score: match.score,
+                details: match.details,
+                workflowTask: match.workflow.task,
+                endedAt: match.workflow.endedAt,
+                preview,
+            },
+            replay,
+            recordingPath,
+            repair,
+        };
     }
 
     const baseDesktop = createDesktopOperator();
@@ -241,18 +281,16 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
         task: input.task,
         reused: false,
         fallback: true,
-        match: match
-            ? {
-                path: match.path,
-                score: match.score,
-                details: match.details,
-                workflowTask: match.workflow.task,
-                endedAt: match.workflow.endedAt,
-            }
-            : null,
+        match: null,
         recordingPath,
         result: out,
     };
+}
+
+function buildRepairTask(task: string, failedStepIndex?: number, error?: string): string {
+    const where = typeof failedStepIndex === 'number' ? ` at recorded step ${failedStepIndex}` : '';
+    const why = error ? ` Error: ${error}` : '';
+    return `Continue and complete this task after a reusable workflow replay failed${where}.${why}\nOriginal task: ${task}`;
 }
 
 function contentTypeFor(filePath: string): string {
@@ -494,32 +532,75 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 const match = bestWorkflowMatch(req.task, workflows, { minScore: threshold });
 
                 if (match) {
+                    const previewInfo = buildReplayPreview(req.task, match);
                     yield {
                         type: 'result',
-                        text: `🎯 Found a matching workflow (${(match.score * 100).toFixed(0)}% confident). Replaying it now...`,
+                        text: formatReplayPreview(previewInfo),
+                        result: { preview: previewInfo },
                     };
 
-                    const desktop = createDesktopOperator();
-                    const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust: req.robust !== false });
+                    const repairDesktop = createDesktopOperator();
+                    const replayAttempt = await replayRecordedWorkflow(repairDesktop, match.workflow, { robust: req.robust !== false, task: req.task });
 
-                    const completeMsg = replay.ok
-                        ? '✅ Done! I replayed a previous workflow that matched your request.'
-                        : '❌ The replay didn\'t work as expected. Would you like me to try a different approach?';
+                    if (!replayAttempt.ok) {
+                        yield {
+                            type: 'result',
+                            text: `Replay failed${typeof replayAttempt.failedStepIndex === 'number' ? ` at step ${replayAttempt.failedStepIndex}` : ''}. I’ll repair from the current desktop state...`,
+                        };
+
+                        const shouldRecordRepair = req.record !== false;
+                        const repairExecutor = shouldRecordRepair ? new RecordingDesktopOperator(repairDesktop, { task: req.task }) : repairDesktop;
+                        const repairAgent = new IterativeDesktopAgent(buildProviderLlm(showLlm, provider));
+                        const repairOut = await repairAgent.run(
+                            buildRepairTask(req.task, replayAttempt.failedStepIndex, replayAttempt.results[replayAttempt.results.length - 1]?.error),
+                            repairExecutor,
+                            {
+                                maxIterations: Number.isFinite(req.maxIterations as number) ? (req.maxIterations as number) : undefined,
+                            }
+                        );
+
+                        let repairRecordingPath: string | undefined;
+                        if (repairOut.ok && repairExecutor instanceof RecordingDesktopOperator) {
+                            const workflow = repairExecutor.finish(true);
+                            repairRecordingPath = await saveRecordedWorkflow(workflow);
+                        }
+
+                        yield {
+                            type: 'complete',
+                            text: repairOut.ok ? 'Done. I repaired the failed replay and completed the task.' : `Repair did not complete: ${repairOut.message}`,
+                            result: {
+                                ok: repairOut.ok,
+                                mode: req.mode,
+                                provider,
+                                task: req.task,
+                                reused: true,
+                                repaired: true,
+                                match,
+                                preview: previewInfo,
+                                replay: replayAttempt,
+                                repair: repairOut,
+                                recordingPath: repairRecordingPath,
+                            },
+                        };
+                        return;
+                    }
 
                     yield {
                         type: 'complete',
-                        text: completeMsg,
+                        text: 'Done. I replayed a previous workflow that matched your request.',
                         result: {
-                            ok: replay.ok,
+                            ok: true,
                             mode: req.mode,
                             provider,
                             task: req.task,
                             reused: true,
                             match,
-                            replay,
+                            preview: previewInfo,
+                            replay: replayAttempt,
                         },
                     };
                     return;
+
                 }
 
                 yield {

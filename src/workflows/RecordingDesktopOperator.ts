@@ -1,8 +1,9 @@
 import type { DesktopOperator } from '../desktop/DesktopOperator';
 import type { DesktopAction, ExecutionResult } from '../desktop/action-types';
-import { isUiCandidateProvider, type ListUiCandidatesOptions } from '../desktop/ui-candidates';
+import { isUiCandidateProvider, type ListUiCandidatesOptions, type UiCandidate } from '../desktop/ui-candidates';
 
-import type { RecordedStep, RecordedWorkflow } from './recorded-workflow';
+import type { RecordedStep, RecordedUiTarget, RecordedWorkflow } from './recorded-workflow';
+import { finalizeRecordedWorkflow } from './finalize-recorded-workflow';
 
 export type RecordingOptions = {
     task: string;
@@ -17,12 +18,17 @@ export class RecordingDesktopOperator implements DesktopOperator {
     private screenHeight: number | null = null;
 
     private readonly steps: RecordedStep[] = [];
+    private lastCandidates: UiCandidate[] | null = null;
+    private lastCandidatesWindowTitle: string | null = null;
 
     constructor(private readonly inner: DesktopOperator, private readonly options: RecordingOptions) { }
 
     async listUiCandidates(options: ListUiCandidatesOptions) {
         if (isUiCandidateProvider(this.inner)) {
-            return this.inner.listUiCandidates(options);
+            const candidates = await this.inner.listUiCandidates(options);
+            this.lastCandidates = candidates;
+            this.lastCandidatesWindowTitle = options.windowTitle;
+            return candidates;
         }
         return [];
     }
@@ -55,10 +61,12 @@ export class RecordingDesktopOperator implements DesktopOperator {
             // If a candidate click is requested, translate it into a stable, replayable
             // normalized click action using the locally-resolved click point.
             let actionToExecute: DesktopAction = action;
+            let uiTarget: RecordedUiTarget | undefined;
             if (action.type === 'clickCandidate' && isUiCandidateProvider(this.inner)) {
                 const pt = this.inner.resolveUiCandidateClickPoint(action.id);
                 const w = this.screenWidth;
                 const h = this.screenHeight;
+                uiTarget = this.uiTargetInfo(action.id);
                 if (pt && typeof w === 'number' && w > 0 && typeof h === 'number' && h > 0) {
                     actionToExecute = {
                         type: 'click',
@@ -79,12 +87,12 @@ export class RecordingDesktopOperator implements DesktopOperator {
                     executedAt: new Date().toISOString(),
                 };
                 results.push(fallback);
-                this.steps.push(this.buildRecordedStep(actionToExecute, fallback));
+                this.steps.push(this.buildRecordedStep(actionToExecute, fallback, uiTarget));
                 continue;
             }
 
             results.push(result);
-            this.steps.push(this.buildRecordedStep(actionToExecute, result));
+            this.steps.push(this.buildRecordedStep(actionToExecute, result, uiTarget));
         }
 
         return results;
@@ -92,7 +100,7 @@ export class RecordingDesktopOperator implements DesktopOperator {
 
     finish(ok: boolean): RecordedWorkflow {
         this.endedAt = new Date().toISOString();
-        return {
+        return finalizeRecordedWorkflow({
             version: 1,
             task: this.options.task,
             ok,
@@ -100,10 +108,10 @@ export class RecordingDesktopOperator implements DesktopOperator {
             endedAt: this.endedAt,
             expectedWindowTitle: this.options.expectedWindowTitle,
             steps: this.steps,
-        };
+        });
     }
 
-    private buildRecordedStep(action: DesktopAction, result: ExecutionResult): RecordedStep {
+    private buildRecordedStep(action: DesktopAction, result: ExecutionResult, uiTarget?: RecordedUiTarget): RecordedStep {
         const semantic = (action as any).hint ? String((action as any).hint) : inferSemantic(action);
 
         const pointer = this.pointerInfo(action);
@@ -114,6 +122,26 @@ export class RecordingDesktopOperator implements DesktopOperator {
             result,
             semantic,
             ...(pointer ? { pointer } : {}),
+            ...(uiTarget ? { uiTarget } : {}),
+        };
+    }
+
+    private uiTargetInfo(candidateId: number): RecordedUiTarget | undefined {
+        const candidate = this.lastCandidates?.find((c) => c.id === candidateId);
+        if (!candidate) return undefined;
+
+        const text = (candidate.text ?? '').replace(/\s+/g, ' ').trim();
+        const role = (candidate.role ?? '').replace(/\s+/g, ' ').trim();
+
+        return {
+            ...(this.lastCandidatesWindowTitle ? { windowTitle: this.lastCandidatesWindowTitle } : {}),
+            ...(text ? { text, query: text } : {}),
+            ...(role ? { role } : {}),
+            ...(candidate.automationId ? { automationId: candidate.automationId } : {}),
+            ...(candidate.className ? { className: candidate.className } : {}),
+            ...(candidate.controlType ? { controlType: candidate.controlType } : {}),
+            typeable: candidate.typeable,
+            clickable: candidate.clickable,
         };
     }
 

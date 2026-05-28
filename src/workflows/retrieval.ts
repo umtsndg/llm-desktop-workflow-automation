@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import type { RecordedWorkflow } from './recorded-workflow';
 import { tfidfCosineSimilarity, tokenOverlapSimilarity } from './task-similarity';
+import { detectPrimaryApp } from './workflow-intent';
 
 export type LoadedWorkflow = {
     path: string;
@@ -18,6 +19,10 @@ export type WorkflowMatch = {
         canonicalTaskScore: number;
         semanticScore: number;
         overlapScore: number;
+        parameterScore: number;
+        appScore: number;
+        actionScore: number;
+        reliabilityScore: number;
     };
 };
 
@@ -64,6 +69,8 @@ export function rankRecordedWorkflows(task: string, workflows: LoadedWorkflow[],
     const canonicalTask = canonicalizeTaskText(task);
     const canonicalTaskTexts = workflows.map((w) => canonicalizeTaskText(w.workflow.task));
     const semanticTexts = workflows.map((w) => buildSemanticText(w.workflow));
+    const actionTexts = workflows.map((w) => buildActionText(w.workflow));
+    const queryActionText = canonicalizeTaskText(task);
 
     const matches: WorkflowMatch[] = workflows.map((w, idx) => {
         const taskScore = tfidfCosineSimilarity(task, w.workflow.task, taskTexts);
@@ -71,18 +78,29 @@ export function rankRecordedWorkflows(task: string, workflows: LoadedWorkflow[],
         const semanticText = semanticTexts[idx] ?? '';
         const semanticScore = semanticText ? tfidfCosineSimilarity(task, semanticText, semanticTexts) : 0;
         const overlapScore = tokenOverlapSimilarity(task, w.workflow.task);
+        const parameterScore = parameterCompatibilityScore(task, w.workflow);
+        const appScore = appCompatibilityScore(task, w.workflow);
+        const actionText = actionTexts[idx] ?? '';
+        const actionScore = actionText ? tfidfCosineSimilarity(queryActionText, actionText, actionTexts) : 0;
+        const reliabilityScore = workflowReliabilityScore(w.workflow);
 
         // Weighted mix: raw task text and a canonicalized variant are primary,
-        // semantic is supportive, overlap guards against TF-IDF weirdness on short strings.
-        // Canonicalization lets similar templates like "open notepad/textedit and write ..."
-        // reuse recordings even when the exact text being written differs.
-        const score = 0.45 * taskScore + 0.25 * canonicalTaskScore + 0.2 * semanticScore + 0.1 * overlapScore;
+        // structured metadata improves reuse decisions when task wording differs.
+        const score =
+            0.28 * taskScore +
+            0.2 * canonicalTaskScore +
+            0.15 * semanticScore +
+            0.08 * overlapScore +
+            0.1 * parameterScore +
+            0.09 * appScore +
+            0.06 * actionScore +
+            0.04 * reliabilityScore;
 
         return {
             path: w.path,
             workflow: w.workflow,
             score,
-            details: { taskScore, canonicalTaskScore, semanticScore, overlapScore },
+            details: { taskScore, canonicalTaskScore, semanticScore, overlapScore, parameterScore, appScore, actionScore, reliabilityScore },
         };
     });
 
@@ -112,6 +130,67 @@ function buildSemanticText(workflow: RecordedWorkflow): string {
 
     // Cap size to keep ranking cheap.
     return parts.join(' | ').slice(0, 4000);
+}
+
+function buildActionText(workflow: RecordedWorkflow): string {
+    const parts = workflow.steps.map((s) => {
+        const action = s.action;
+        if (action.type === 'launchApp') return `launch app ${action.command}`;
+        if (action.type === 'focusWindow') return `focus window ${action.title}`;
+        if (action.type === 'typeText') return 'type text';
+        if (action.type === 'click') return `click ${s.uiTarget?.query ?? s.uiTarget?.text ?? action.hint ?? s.semantic ?? ''}`;
+        if (action.type === 'clickCandidate') return `click ${s.uiTarget?.query ?? s.uiTarget?.text ?? action.hint ?? s.semantic ?? ''}`;
+        if (action.type === 'wait') return 'wait';
+        if (action.type === 'hotkey') return `hotkey ${action.keys.join(' ')}`;
+        if (action.type === 'pressKey') return `press ${action.key}`;
+        if (action.type === 'scroll') return `scroll ${action.direction ?? 'down'}`;
+        return action.type;
+    });
+    return parts.join(' | ').slice(0, 4000);
+}
+
+function parameterCompatibilityScore(task: string, workflow: RecordedWorkflow): number {
+    const params = workflow.parameters ?? [];
+    if (params.length === 0) return 0.5;
+
+    const taskLower = task.toLowerCase();
+    let matched = 0;
+    for (const p of params) {
+        if (p.kind === 'text' && /\b(write|type|enter|message|subject|search)\b/i.test(taskLower)) matched++;
+        else if (p.kind === 'app' && detectPrimaryApp(task)) matched++;
+        else if (p.kind === 'window' && detectPrimaryApp(task)) matched++;
+        else if (p.originalValue && !taskLower.includes(p.originalValue.toLowerCase())) matched += 0.5;
+    }
+
+    return clamp01(matched / Math.max(1, params.length));
+}
+
+function appCompatibilityScore(task: string, workflow: RecordedWorkflow): number {
+    const taskApp = detectPrimaryApp(task);
+    const workflowApp = workflow.appContext?.app ?? detectPrimaryApp(workflow.task);
+    if (!taskApp && !workflowApp) return 0.5;
+    if (!taskApp || !workflowApp) return 0.25;
+    if (taskApp === workflowApp) return 1;
+    if (isEquivalentApp(taskApp, workflowApp)) return 0.9;
+    return 0;
+}
+
+function workflowReliabilityScore(workflow: RecordedWorkflow): number {
+    const successes = workflow.replayStats?.successes ?? 0;
+    const failures = workflow.replayStats?.failures ?? 0;
+    if (successes + failures === 0) return 0.5;
+    return (successes + 1) / (successes + failures + 2);
+}
+
+function isEquivalentApp(a: string, b: string): boolean {
+    const plainText = new Set(['notepad', 'textedit']);
+    const browser = new Set(['browser', 'chrome', 'edge']);
+    return (plainText.has(a) && plainText.has(b)) || (browser.has(a) && browser.has(b));
+}
+
+function clamp01(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
 }
 
 function canonicalizeTaskText(task: string): string {
