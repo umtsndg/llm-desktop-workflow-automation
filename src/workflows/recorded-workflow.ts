@@ -77,5 +77,10 @@ export type RecordedWorkflow = {
     parameters?: RecordedWorkflowParameter[];
     preconditions?: RecordedWorkflowPrecondition[];
     appContext?: WorkflowAppContext;
+    replayStats?: {
+        successes?: number;
+        failures?: number;
+        lastFailureStep?: number;
+    };
     steps: RecordedStep[];
 };

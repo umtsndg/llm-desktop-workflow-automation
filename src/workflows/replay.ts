@@ -17,7 +17,7 @@ export async function replayRecordedWorkflow(
     operator: DesktopOperator,
     workflow: RecordedWorkflow,
     options?: ReplayOptions
-): Promise<{ ok: boolean; results: { step: RecordedStep; resultOk: boolean }[]; parameterization?: { changes: ParameterizationChange[] } }> {
+): Promise<{ ok: boolean; results: { step: RecordedStep; resultOk: boolean; error?: string }[]; failedStepIndex?: number; parameterization?: { changes: ParameterizationChange[] } }> {
     const robust = options?.robust ?? true;
     const parameterization = options?.task
         ? parameterizeWorkflowForTask(workflow, options.task)
@@ -29,7 +29,7 @@ export async function replayRecordedWorkflow(
     const screenWidth = obs?.width ?? null;
     const screenHeight = obs?.height ?? null;
 
-    const results: { step: RecordedStep; resultOk: boolean }[] = [];
+    const results: { step: RecordedStep; resultOk: boolean; error?: string }[] = [];
 
     const steps = robust ? applyReplaySafety(replayWorkflow.steps, replayWorkflow.expectedWindowTitle) : replayWorkflow.steps;
     let currentWindowTitle = replayWorkflow.expectedWindowTitle;
@@ -39,9 +39,9 @@ export async function replayRecordedWorkflow(
             ? await adaptActionForReplay(operator, step.action, step, screenWidth, screenHeight, currentWindowTitle)
             : step.action;
         const [r] = await operator.execute([action]);
-        results.push({ step, resultOk: Boolean(r?.ok) });
+        results.push({ step, resultOk: Boolean(r?.ok), ...(r?.error ? { error: r.error } : {}) });
         if (!r?.ok) {
-            return { ok: false, results, ...(parameterization ? { parameterization: { changes: parameterization.changes } } : {}) };
+            return { ok: false, results, failedStepIndex: step.index, ...(parameterization ? { parameterization: { changes: parameterization.changes } } : {}) };
         }
         if (action.type === 'focusWindow') {
             currentWindowTitle = action.title;
