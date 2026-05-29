@@ -1,6 +1,9 @@
 const form = document.getElementById('chat-form');
 const taskInput = document.getElementById('task-input');
 const providerInput = document.getElementById('provider');
+const modelInput = document.getElementById('model');
+const customModelWrap = document.getElementById('custom-model-wrap');
+const customModelInput = document.getElementById('custom-model');
 const modeInput = document.getElementById('mode');
 const maxIterationsInput = document.getElementById('max-iterations');
 const thresholdInput = document.getElementById('threshold');
@@ -12,6 +15,11 @@ const messagesEl = document.getElementById('messages');
 const statusPill = document.getElementById('status-pill');
 
 let isRunning = false;
+let modelOptions = {
+    openai: ['gpt-5.1'],
+    gemini: ['gemini-2.5-flash'],
+    claude: ['claude-sonnet-4-5-20250929'],
+};
 
 function setStatus(type, text) {
     statusPill.className = `pill ${type}`;
@@ -37,6 +45,45 @@ function addMessage(type, text) {
     return msg;
 }
 
+function refreshModelOptions(defaultModel) {
+    const provider = providerInput.value;
+    const options = modelOptions[provider] || [];
+    const selectedModel = defaultModel || modelInput.value || options[0] || '';
+
+    modelInput.replaceChildren();
+
+    for (const model of options) {
+        const option = document.createElement('option');
+        option.value = model;
+        option.textContent = model;
+        modelInput.appendChild(option);
+    }
+
+    const customOption = document.createElement('option');
+    customOption.value = '__custom__';
+    customOption.textContent = 'Custom...';
+    modelInput.appendChild(customOption);
+
+    if (options.includes(selectedModel)) {
+        modelInput.value = selectedModel;
+        customModelWrap.hidden = true;
+    } else if (selectedModel) {
+        modelInput.value = '__custom__';
+        customModelInput.value = selectedModel;
+        customModelWrap.hidden = false;
+    } else {
+        modelInput.value = options[0] || '__custom__';
+        customModelWrap.hidden = modelInput.value !== '__custom__';
+    }
+}
+
+function selectedModel() {
+    if (modelInput.value === '__custom__') {
+        return customModelInput.value.trim();
+    }
+    return modelInput.value;
+}
+
 async function submitTask(evt) {
     evt.preventDefault();
 
@@ -59,6 +106,7 @@ async function submitTask(evt) {
     const payload = {
         task,
         provider: providerInput.value,
+        model: selectedModel(),
         mode: modeInput.value,
         maxIterations: Number(maxIterationsInput.value),
         threshold: Number(thresholdInput.value),
@@ -134,12 +182,30 @@ async function submitTask(evt) {
 
 async function boot() {
     form.addEventListener('submit', submitTask);
+    providerInput.addEventListener('change', () => {
+        const options = modelOptions[providerInput.value] || [];
+        refreshModelOptions(options[0]);
+    });
+    modelInput.addEventListener('change', () => {
+        customModelWrap.hidden = modelInput.value !== '__custom__';
+        if (!customModelWrap.hidden) {
+            customModelInput.focus();
+        }
+    });
+    refreshModelOptions();
 
     try {
         const res = await fetch('/api/health');
         const data = await res.json();
 
         if (data.ok) {
+            if (data.models) {
+                modelOptions = data.models;
+            }
+            if (data.provider) {
+                providerInput.value = data.provider;
+            }
+            refreshModelOptions(data.model);
             setStatus('idle', 'Ready');
         } else {
             setStatus('error', 'Server unavailable');

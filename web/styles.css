@@ -114,9 +114,59 @@ body {
 }
 
 .header-controls {
+    position: relative;
     display: flex;
     gap: 0.5rem;
     align-items: center;
+}
+
+.dev-tools {
+    position: relative;
+}
+
+.dev-tools summary {
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #fffdfa;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 0.35rem 0.62rem;
+    text-transform: uppercase;
+    user-select: none;
+}
+
+.dev-tools summary::-webkit-details-marker {
+    display: none;
+}
+
+.dev-tools[open] summary {
+    border-color: var(--accent-2);
+    color: var(--accent-2);
+}
+
+.dev-tools-menu {
+    position: absolute;
+    top: calc(100% + 0.6rem);
+    right: 0;
+    z-index: 5;
+    width: min(22rem, calc(100vw - 2rem));
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    padding: 0.85rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: color-mix(in oklab, var(--paper) 96%, white 4%);
+    box-shadow: 0 14px 32px rgba(26, 36, 51, 0.16);
+}
+
+.checkbox-option {
+    min-height: 2.2rem;
+    justify-content: center;
 }
 
 .chat-container {
@@ -333,6 +383,7 @@ body {
 }
 
 .option input[type="number"],
+.option input[type="text"],
 .option select {
     font: inherit;
     padding: 0.4rem;
@@ -347,11 +398,24 @@ body {
         max-width: 100%;
     }
 
+    .chat-header {
+        align-items: flex-start;
+        gap: 0.8rem;
+    }
+
+    .chat-header h1 {
+        font-size: 1.25rem;
+    }
+
     .bubble {
         max-width: 85%;
     }
 
     .options-grid {
         grid-template-columns: 1fr 1fr;
+    }
+
+    .dev-tools-menu {
+        grid-template-columns: 1fr;
     }
 }
