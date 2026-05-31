@@ -70,7 +70,10 @@ function buildAppSnippets(task: string | undefined, platform: DesktopPlatform): 
     }
 
     if (apps.has('excel')) {
+        const modifier = platform === 'macos' ? 'cmd' : 'ctrl';
         out.push('- Excel: prefer clicking visible ribbon buttons; request a screenshot before clicking if the UI state is unclear.');
+        out.push(`- Excel sorting/filtering: before starting to sort or filter, ALWAYS click the intended column header or select the intended table/range first.`);
+        out.push('- Excel sorting/filtering: if the task says to sort by a specific column, after selecting the table/range, use the Sort dialog or the visible column/header controls so the intended column is explicit.');
     }
 
     if (apps.has('browser')) {

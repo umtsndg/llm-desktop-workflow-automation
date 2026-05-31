@@ -175,6 +175,7 @@ export class NutJsDesktopOperator implements DesktopOperator {
             const id = typeof o.id === 'number' && Number.isFinite(o.id) ? o.id : null;
             const role = typeof o.role === 'string' ? o.role : '';
             const text = typeof o.text === 'string' ? o.text : '';
+            const value = typeof o.value === 'string' ? o.value : '';
             const bbox = Array.isArray(o.bbox) && o.bbox.length === 4 ? o.bbox.map((n: any) => Number(n)) : null;
             if (id === null || !bbox || bbox.some((n: number) => !Number.isFinite(n))) continue;
 
@@ -192,6 +193,7 @@ export class NutJsDesktopOperator implements DesktopOperator {
                 id,
                 role,
                 text,
+                value,
                 bbox: [bbox[0], bbox[1], bbox[2], bbox[3]],
                 enabled,
                 visible,
@@ -1200,6 +1202,37 @@ function Test-UiaPatternAvailable {
     return $false
 }
 
+function Get-UiaElementValue {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Automation.AutomationElement]$Element
+    )
+
+    try {
+        if ([bool]$Element.Current.IsValuePatternAvailable) {
+            $pattern = $Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            if ($pattern) {
+                $value = [string]$pattern.Current.Value
+                if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+            }
+        }
+    } catch {
+    }
+
+    try {
+        if ([bool]$Element.Current.IsLegacyIAccessiblePatternAvailable) {
+            $pattern = $Element.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+            if ($pattern) {
+                $value = [string]$pattern.Current.Value
+                if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+            }
+        }
+    } catch {
+    }
+
+    return ""
+}
+
 function Get-UiaElementClickablePointOrCenter {
     param(
         [Parameter(Mandatory)]
@@ -1301,6 +1334,7 @@ for ($i = 0; $i -lt $elements.Count; $i++) {
     $name = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "Name")
     $help = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "HelpText")
     $label = Get-UiaLabelText -Element $e
+    $value = Get-UiaElementValue -Element $e
     $autoId = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "AutomationId")
     $class = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "ClassName")
     $frameworkId = [string](Get-UiaSafeCurrentProperty -Element $e -PropertyName "FrameworkId")
@@ -1331,6 +1365,7 @@ for ($i = 0; $i -lt $elements.Count; $i++) {
     $obj = [pscustomobject]@{
         role = $controlType
         text = $text
+        value = $value
         bbox = @(
             [int][math]::Round($rect.X),
             [int][math]::Round($rect.Y),
@@ -1358,7 +1393,7 @@ $limited = $ranked | Select-Object -First $limit
 $out = @()
 $id = 0
 foreach ($it in $limited) {
-    $out += [pscustomobject]@{ id = $id; role = $it.role; text = $it.text; bbox = $it.bbox; enabled = $it.enabled; visible = $it.visible; clickable = $it.clickable; typeable = $it.typeable; automationId = $it.automationId; className = $it.className; frameworkId = $it.frameworkId; controlType = $it.controlType; clickPoint = $it.clickPoint }
+    $out += [pscustomobject]@{ id = $id; role = $it.role; text = $it.text; value = $it.value; bbox = $it.bbox; enabled = $it.enabled; visible = $it.visible; clickable = $it.clickable; typeable = $it.typeable; automationId = $it.automationId; className = $it.className; frameworkId = $it.frameworkId; controlType = $it.controlType; clickPoint = $it.clickPoint }
     $id++
 }
 
