@@ -377,6 +377,15 @@ body {
     font-size: 0.85rem;
 }
 
+.option-checkbox {
+    justify-content: space-between;
+}
+
+.option-checkbox input[type="checkbox"] {
+    width: 1.05rem;
+    height: 1.05rem;
+}
+
 .option span {
     color: var(--muted);
     font-size: 0.75rem;

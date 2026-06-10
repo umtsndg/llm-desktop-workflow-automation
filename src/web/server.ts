@@ -14,6 +14,7 @@ import {
     type LLMProvider,
 } from '../llm/llm-provider';
 import { RecordingDesktopOperator } from '../workflows/RecordingDesktopOperator';
+import { verifyRecordingWithLlm } from '../workflows/llm-recording-verification';
 import { replayRecordedWorkflow } from '../workflows/replay';
 import { buildReplayPreview, formatReplayPreview } from '../workflows/replay-preview';
 import { bestWorkflowMatch, loadRecordedWorkflows, rankRecordedWorkflows } from '../workflows/retrieval';
@@ -24,6 +25,7 @@ const webRoot = resolve(process.cwd(), 'web');
 const DEFAULT_EXECUTE_MODE: ExecuteMode = 'auto';
 const DEFAULT_MAX_ITERATIONS = 20;
 const DEFAULT_THRESHOLD = 0.55;
+const DEFAULT_LLM_VERIFICATION_THRESHOLD = 0.45;
 
 type ExecuteMode = 'plan' | 'run' | 'loop' | 'match' | 'auto';
 
@@ -38,6 +40,7 @@ type ExecuteRequest = {
     record?: boolean;
     screenshot?: boolean;
     showLlm?: boolean;
+    recordingVerificationWithLlm?: boolean;
 };
 
 let activeRun: { id: string; task: string; mode: ExecuteMode; provider: LLMProvider; model: string; startedAt: string } | null = null;
@@ -98,6 +101,7 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
         record: typeof obj.record === 'boolean' ? obj.record : true,
         screenshot: typeof obj.screenshot === 'boolean' ? obj.screenshot : true,
         showLlm: typeof obj.showLlm === 'boolean' ? obj.showLlm : undefined,
+        recordingVerificationWithLlm: typeof obj.recordingVerificationWithLlm === 'boolean' ? obj.recordingVerificationWithLlm : false,
     };
 }
 
@@ -217,12 +221,23 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
     const robust = input.robust === false ? false : true;
     const record = input.record === false ? false : true;
     const workflows = await loadRecordedWorkflows();
-    const match = bestWorkflowMatch(input.task, workflows, { minScore: threshold });
+    const matchThreshold = input.recordingVerificationWithLlm
+        ? Math.min(threshold, DEFAULT_LLM_VERIFICATION_THRESHOLD)
+        : threshold;
+    const match = bestWorkflowMatch(input.task, workflows, { minScore: matchThreshold });
 
     if (match) {
         const desktop = createDesktopOperator();
         const preview = buildReplayPreview(input.task, match);
-        const replay = await replayRecordedWorkflow(desktop, match.workflow, { robust, task: input.task });
+        const verification = input.recordingVerificationWithLlm
+            ? await verifyRecordingWithLlm(buildProviderLlm(showLlm, provider, model), match.workflow, input.task)
+            : null;
+        const replayWorkflow = verification?.workflow ?? match.workflow;
+        const replay = await replayRecordedWorkflow(
+            desktop,
+            replayWorkflow,
+            verification ? { robust } : { robust, task: input.task }
+        );
         if (replay.ok) {
             return {
                 ok: true,
@@ -238,7 +253,10 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                     workflowTask: match.workflow.task,
                     endedAt: match.workflow.endedAt,
                     preview,
+                    directReplayThreshold: threshold,
+                    effectiveMatchThreshold: matchThreshold,
                 },
+                ...(verification ? { recordingVerification: { summary: verification.summary } } : {}),
                 replay,
             };
         }
@@ -272,8 +290,11 @@ async function runAutomation(input: ExecuteRequest): Promise<unknown> {
                 workflowTask: match.workflow.task,
                 endedAt: match.workflow.endedAt,
                 preview,
+                directReplayThreshold: threshold,
+                effectiveMatchThreshold: matchThreshold,
             },
             replay,
+            ...(verification ? { recordingVerification: { summary: verification.summary } } : {}),
             recordingPath,
             repair,
         };
@@ -560,7 +581,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                 };
 
                 const workflows = await loadRecordedWorkflows();
-                const match = bestWorkflowMatch(req.task, workflows, { minScore: threshold });
+                const matchThreshold = req.recordingVerificationWithLlm
+                    ? Math.min(threshold, DEFAULT_LLM_VERIFICATION_THRESHOLD)
+                    : threshold;
+                const match = bestWorkflowMatch(req.task, workflows, { minScore: matchThreshold });
 
                 if (match) {
                     const previewInfo = buildReplayPreview(req.task, match);
@@ -569,9 +593,29 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                         text: formatReplayPreview(previewInfo),
                         result: { preview: previewInfo },
                     };
+                    if (req.recordingVerificationWithLlm && match.score < threshold) {
+                        yield {
+                            type: 'result',
+                            text: `Match is below direct replay threshold (${Math.round(match.score * 100)}%). Verifying with LLM before replay...`,
+                        };
+                    }
 
                     const repairDesktop = createDesktopOperator();
-                    const replayAttempt = await replayRecordedWorkflow(repairDesktop, match.workflow, { robust: req.robust !== false, task: req.task });
+                    const verification = req.recordingVerificationWithLlm
+                        ? await verifyRecordingWithLlm(buildProviderLlm(showLlm, provider, model), match.workflow, req.task)
+                        : null;
+                    if (verification) {
+                        yield {
+                            type: 'result',
+                            text: `Recording verification with LLM: ${verification.summary}`,
+                        };
+                    }
+
+                    const replayAttempt = await replayRecordedWorkflow(
+                        repairDesktop,
+                        verification?.workflow ?? match.workflow,
+                        verification ? { robust: req.robust !== false } : { robust: req.robust !== false, task: req.task }
+                    );
 
                     if (!replayAttempt.ok) {
                         yield {
@@ -609,6 +653,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                                 repaired: true,
                                 match,
                                 preview: previewInfo,
+                                ...(verification ? { recordingVerification: { summary: verification.summary } } : {}),
                                 replay: replayAttempt,
                                 repair: repairOut,
                                 recordingPath: repairRecordingPath,
@@ -629,6 +674,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
                             reused: true,
                             match,
                             preview: previewInfo,
+                            ...(verification ? { recordingVerification: { summary: verification.summary } } : {}),
                             replay: replayAttempt,
                         },
                     };

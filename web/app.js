@@ -4,6 +4,7 @@ const providerInput = document.getElementById('provider');
 const modelInput = document.getElementById('model');
 const customModelWrap = document.getElementById('custom-model-wrap');
 const customModelInput = document.getElementById('custom-model');
+const recordingVerificationInput = document.getElementById('recording-verification');
 const sendBtn = document.getElementById('send-btn');
 const messagesEl = document.getElementById('messages');
 const statusPill = document.getElementById('status-pill');
@@ -15,6 +16,7 @@ const EXECUTION_DEFAULTS = {
     record: true,
     screenshot: true,
     showLlm: false,
+    recordingVerificationWithLlm: false,
 };
 
 let isRunning = false;
@@ -111,6 +113,7 @@ async function submitTask(evt) {
         provider: providerInput.value,
         model: selectedModel(),
         ...EXECUTION_DEFAULTS,
+        recordingVerificationWithLlm: recordingVerificationInput.checked,
     };
 
     try {
