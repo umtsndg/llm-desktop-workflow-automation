@@ -469,14 +469,16 @@ export class NutJsDesktopOperator implements DesktopOperator {
     }
 
     private async typeTextSafe(text: string): Promise<void> {
-        // If we encounter a character we don't know how to map safely,
-        // fall back to the library's generic typing for the remaining substring.
-        // (Do NOT type the entire string, otherwise we duplicate the already-typed prefix.)
+        if (needsClipboardPaste(text)) {
+            await this.pasteTextViaClipboard(text);
+            return;
+        }
+
         for (let i = 0; i < text.length; i++) {
             const ch = text[i] ?? '';
             const mapping = SIMPLE_CHAR_KEY_MAP[ch];
             if (!mapping) {
-                await keyboard.type(text.slice(i));
+                await this.pasteTextViaClipboard(text.slice(i));
                 return;
             }
 
@@ -490,6 +492,22 @@ export class NutJsDesktopOperator implements DesktopOperator {
             if (mapping.shift) {
                 await keyboard.releaseKey(Key.LeftShift).catch(() => undefined);
             }
+        }
+    }
+
+    private async pasteTextViaClipboard(text: string): Promise<void> {
+        const previous = await getClipboardText().catch(() => null);
+        await setClipboardText(text);
+
+        await keyboard.pressKey(Key.LeftControl);
+        await keyboard.pressKey(Key.V);
+        await keyboard.releaseKey(Key.V);
+        await keyboard.releaseKey(Key.LeftControl);
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        if (previous !== null) {
+            await setClipboardText(previous).catch(() => undefined);
         }
     }
 
@@ -1399,6 +1417,24 @@ foreach ($it in $limited) {
 
 $out | ConvertTo-Json -Depth 6 -Compress
 `.trim();
+}
+
+function needsClipboardPaste(text: string): boolean {
+    for (const ch of text) {
+        if (!SIMPLE_CHAR_KEY_MAP[ch]) return true;
+    }
+    return false;
+}
+
+async function getClipboardText(): Promise<string> {
+    return runPowerShell('Get-Clipboard -Raw -ErrorAction Stop');
+}
+
+async function setClipboardText(text: string): Promise<void> {
+    const encoded = Buffer.from(text, 'utf16le').toString('base64');
+    await runPowerShell(
+        `$text = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${encoded}')); Set-Clipboard -Value $text`
+    );
 }
 
 function runPowerShell(script: string): Promise<string> {

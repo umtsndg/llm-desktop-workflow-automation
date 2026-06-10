@@ -86,7 +86,7 @@ export function rankRecordedWorkflows(task: string, workflows: LoadedWorkflow[],
 
         // Weighted mix: raw task text and a canonicalized variant are primary,
         // structured metadata improves reuse decisions when task wording differs.
-        const score =
+        const weightedScore =
             0.28 * taskScore +
             0.2 * canonicalTaskScore +
             0.15 * semanticScore +
@@ -95,6 +95,8 @@ export function rankRecordedWorkflows(task: string, workflows: LoadedWorkflow[],
             0.09 * appScore +
             0.06 * actionScore +
             0.04 * reliabilityScore;
+
+        const score = applyExactMatchBoost(task, w.workflow.task, canonicalTask, canonicalTaskTexts[idx] ?? '', weightedScore);
 
         return {
             path: w.path,
@@ -118,6 +120,32 @@ export function bestWorkflowMatch(task: string, workflows: LoadedWorkflow[], opt
     if (best.score < minScore) return null;
 
     return best;
+}
+
+function applyExactMatchBoost(
+    task: string,
+    workflowTask: string,
+    canonicalTask: string,
+    canonicalWorkflowTask: string,
+    score: number
+): number {
+    if (normalizeForExactMatch(task) === normalizeForExactMatch(workflowTask)) {
+        return Math.max(score, 0.99);
+    }
+
+    if (normalizeForExactMatch(canonicalTask) === normalizeForExactMatch(canonicalWorkflowTask)) {
+        return Math.max(score, 0.95);
+    }
+
+    return score;
+}
+
+function normalizeForExactMatch(input: string): string {
+    return input
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}@._+-]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 function buildSemanticText(workflow: RecordedWorkflow): string {

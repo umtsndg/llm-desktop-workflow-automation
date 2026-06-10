@@ -91,4 +91,66 @@ const preview = buildReplayPreview('open notepad and write goodbye', ranked[0]!)
 assert.equal(preview.substitutions.some((s) => s.field === 'typeText.text' && s.to === 'goodbye'), true);
 assert.equal(preview.workflowTask, 'open notepad and write hello');
 
+const exactOutlookTask = 'Open outlook and send a mail introducing yourself to kralumut234@gmail.com';
+const exactOutlook = rankRecordedWorkflows(
+    exactOutlookTask,
+    [
+        {
+            path: 'outlook.json',
+            workflow: {
+                version: 1,
+                task: exactOutlookTask,
+                ok: true,
+                startedAt: '2026-06-10T00:00:00.000Z',
+                endedAt: '2026-06-10T00:01:00.000Z',
+                appContext: {
+                    kind: 'outlook',
+                    app: 'outlook',
+                    windowsCommand: 'Outlook',
+                    macCommand: 'Microsoft Outlook',
+                    windowsWindowTitle: 'Outlook',
+                    macWindowTitle: 'Outlook',
+                },
+                parameters: [
+                    {
+                        name: 'text_to_write',
+                        kind: 'text',
+                        source: 'task',
+                        originalValue: 'kralumut234@gmail.com',
+                        usedBy: [{ stepIndex: 2, field: 'typeText.text' }],
+                    },
+                    {
+                        name: 'text_to_write',
+                        kind: 'text',
+                        source: 'task',
+                        originalValue: 'Introduction',
+                        usedBy: [{ stepIndex: 4, field: 'typeText.text' }],
+                    },
+                ],
+                steps: [
+                    {
+                        index: 0,
+                        action: { type: 'launchApp', command: 'Outlook', mode: 'search' },
+                        result: { ok: true, action: { type: 'launchApp', command: 'Outlook', mode: 'search' }, executedAt: 'x' },
+                    },
+                    {
+                        index: 1,
+                        action: { type: 'click', nx: 0.04, ny: 0.07, hint: 'Click candidate 20' },
+                        result: { ok: true, action: { type: 'click', nx: 0.04, ny: 0.07, hint: 'Click candidate 20' }, executedAt: 'x' },
+                    },
+                    {
+                        index: 2,
+                        action: { type: 'typeText', text: 'kralumut234@gmail.com' },
+                        result: { ok: true, action: { type: 'typeText', text: 'kralumut234@gmail.com' }, executedAt: 'x' },
+                    },
+                ],
+            },
+        },
+    ],
+    { limit: 1 }
+);
+
+assert.equal(exactOutlook[0]?.path, 'outlook.json');
+assert.ok((exactOutlook[0]?.score ?? 0) >= 0.99);
+
 console.log('replay-preview-retrieval tests passed');

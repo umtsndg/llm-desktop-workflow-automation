@@ -69,9 +69,11 @@ async function adaptActionForReplay(
 
 function applyReplaySafety(steps: RecordedStep[], expectedWindowTitle?: string): RecordedStep[] {
     const out: RecordedStep[] = [];
+    const launchesApp = steps.some((step) => step.action.type === 'launchApp');
 
-    // If we have a known target window, focus it once up-front.
-    if (expectedWindowTitle) {
+    // If the recording launches the app, focusing before launch can fail and
+    // stop replay before the real workflow starts. In that case focus after launch.
+    if (expectedWindowTitle && !launchesApp) {
         const action: DesktopAction = {
             type: 'focusWindow',
             title: expectedWindowTitle,
