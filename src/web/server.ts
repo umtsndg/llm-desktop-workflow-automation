@@ -21,6 +21,9 @@ import { saveRecordedWorkflow } from '../workflows/workflow-store';
 
 const PORT = Number(process.env.WEB_PORT ?? 3000);
 const webRoot = resolve(process.cwd(), 'web');
+const DEFAULT_EXECUTE_MODE: ExecuteMode = 'auto';
+const DEFAULT_MAX_ITERATIONS = 20;
+const DEFAULT_THRESHOLD = 0.75;
 
 type ExecuteMode = 'plan' | 'run' | 'loop' | 'match' | 'auto';
 
@@ -79,7 +82,7 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
         throw new Error('Field "task" is required.');
     }
 
-    const mode = obj.mode ?? 'auto';
+    const mode = obj.mode ?? DEFAULT_EXECUTE_MODE;
     if (!['plan', 'run', 'loop', 'match', 'auto'].includes(String(mode))) {
         throw new Error('Field "mode" must be one of: plan, run, loop, match, auto.');
     }
@@ -89,11 +92,11 @@ function asExecuteRequest(body: unknown): ExecuteRequest {
         mode: mode as ExecuteMode,
         provider: normalizeLLMProvider(obj.provider),
         model: normalizeLLMModel((obj as { model?: unknown }).model),
-        maxIterations: Number.isFinite(Number(obj.maxIterations)) ? Number(obj.maxIterations) : undefined,
-        threshold: Number.isFinite(Number(obj.threshold)) ? Number(obj.threshold) : undefined,
+        maxIterations: Number.isFinite(Number(obj.maxIterations)) ? Number(obj.maxIterations) : DEFAULT_MAX_ITERATIONS,
+        threshold: Number.isFinite(Number(obj.threshold)) ? Number(obj.threshold) : DEFAULT_THRESHOLD,
         robust: typeof obj.robust === 'boolean' ? obj.robust : undefined,
-        record: typeof obj.record === 'boolean' ? obj.record : undefined,
-        screenshot: typeof obj.screenshot === 'boolean' ? obj.screenshot : undefined,
+        record: typeof obj.record === 'boolean' ? obj.record : true,
+        screenshot: typeof obj.screenshot === 'boolean' ? obj.screenshot : true,
         showLlm: typeof obj.showLlm === 'boolean' ? obj.showLlm : undefined,
     };
 }
@@ -103,7 +106,7 @@ function buildProviderLlm(showLlm: boolean, provider?: LLMProvider, model?: stri
 }
 
 async function runAutomation(input: ExecuteRequest): Promise<unknown> {
-    const threshold = Number.isFinite(input.threshold) ? (input.threshold as number) : 0.55;
+    const threshold = Number.isFinite(input.threshold) ? (input.threshold as number) : DEFAULT_THRESHOLD;
     const showLlm = input.showLlm === true;
     const provider = input.provider ?? normalizeLLMProvider(undefined);
     const model = input.model ?? providerModel(provider);
@@ -412,7 +415,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse): Promise<boo
             });
 
             async function* runAutomationWithStream(req: ExecuteRequest) {
-                const threshold = Number.isFinite(req.threshold) ? (req.threshold as number) : 0.55;
+                const threshold = Number.isFinite(req.threshold) ? (req.threshold as number) : DEFAULT_THRESHOLD;
                 const showLlm = req.showLlm === true;
                 const provider = req.provider ?? normalizeLLMProvider(undefined);
                 const model = req.model ?? providerModel(provider);

@@ -4,15 +4,18 @@ const providerInput = document.getElementById('provider');
 const modelInput = document.getElementById('model');
 const customModelWrap = document.getElementById('custom-model-wrap');
 const customModelInput = document.getElementById('custom-model');
-const modeInput = document.getElementById('mode');
-const maxIterationsInput = document.getElementById('max-iterations');
-const thresholdInput = document.getElementById('threshold');
-const recordInput = document.getElementById('record');
-const screenshotInput = document.getElementById('screenshot');
-const showLlmInput = document.getElementById('show-llm');
 const sendBtn = document.getElementById('send-btn');
 const messagesEl = document.getElementById('messages');
 const statusPill = document.getElementById('status-pill');
+
+const EXECUTION_DEFAULTS = {
+    mode: 'auto',
+    maxIterations: 20,
+    threshold: 0.75,
+    record: true,
+    screenshot: true,
+    showLlm: false,
+};
 
 let isRunning = false;
 let modelOptions = {
@@ -107,12 +110,7 @@ async function submitTask(evt) {
         task,
         provider: providerInput.value,
         model: selectedModel(),
-        mode: modeInput.value,
-        maxIterations: Number(maxIterationsInput.value),
-        threshold: Number(thresholdInput.value),
-        record: recordInput.checked,
-        screenshot: screenshotInput.checked,
-        showLlm: showLlmInput.checked,
+        ...EXECUTION_DEFAULTS,
     };
 
     try {
