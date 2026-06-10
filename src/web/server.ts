@@ -23,7 +23,7 @@ const PORT = Number(process.env.WEB_PORT ?? 3000);
 const webRoot = resolve(process.cwd(), 'web');
 const DEFAULT_EXECUTE_MODE: ExecuteMode = 'auto';
 const DEFAULT_MAX_ITERATIONS = 20;
-const DEFAULT_THRESHOLD = 0.75;
+const DEFAULT_THRESHOLD = 0.55;
 
 type ExecuteMode = 'plan' | 'run' | 'loop' | 'match' | 'auto';
 

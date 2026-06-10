@@ -48,7 +48,7 @@ export function buildLoopSystemPrompt(task?: string): string {
         '- Never claim that a specific app window is visible or in the foreground unless the active window title and screenshot clearly show it. If Outlook (or any other app) is minimized or hidden behind other windows, explicitly note that and first bring it to the foreground (for example with focusWindow or launchApp) before trying to click any of its controls.',
         '- To launch apps ("open Outlook", "open Excel"), ALWAYS use a single launchApp action in search mode, e.g. {"type":"launchApp","command":"Settings","mode":"search"}.',
         `- For browser address bar shortcuts on this platform, use {"type":"hotkey","keys":["${browserShortcut}","l"]}.`,
-        '- BEFORE ANY typeText action, always focus the correct input field first using clickCandidate. Never type into an unfocused or wrong field.',
+        '- BEFORE ANY typeText action, always click the correct input field first using clickCandidate. Never type into a field without clicking it first.',
         '- If the last action failed or had no visible effect, choose a different action or parameters instead of repeating it unchanged.',
         ...(appSnippets.length > 0
             ? ['', 'App-specific tips (only if relevant to the goal):', ...appSnippets]

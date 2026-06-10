@@ -11,7 +11,7 @@ const statusPill = document.getElementById('status-pill');
 const EXECUTION_DEFAULTS = {
     mode: 'auto',
     maxIterations: 20,
-    threshold: 0.75,
+    threshold: 0.55,
     record: true,
     screenshot: true,
     showLlm: false,
