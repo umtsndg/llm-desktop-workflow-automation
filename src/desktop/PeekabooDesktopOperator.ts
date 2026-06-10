@@ -66,6 +66,7 @@ export class PeekabooDesktopOperator implements DesktopOperator {
             const bbox = extractBounds(element);
             if (!bbox) continue;
 
+            const value = readString(element, ['value']);
             const text = firstNonEmptyString(element, [
                 'label',
                 'title',
@@ -97,6 +98,7 @@ export class PeekabooDesktopOperator implements DesktopOperator {
                 id: candidates.length,
                 role,
                 text: text ?? peekabooId ?? '',
+                value: value ?? '',
                 bbox,
                 enabled,
                 visible,

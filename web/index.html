@@ -24,43 +24,6 @@
                 <h1>Desktop Automation Assistant</h1>
             </div>
             <div class="header-controls">
-                <details class="dev-tools">
-                    <summary>Dev Tools</summary>
-                    <div class="dev-tools-menu">
-                        <label class="option">
-                            <span>Mode</span>
-                            <select id="mode">
-                                <option value="auto" selected>auto</option>
-                                <option value="loop">loop</option>
-                                <option value="run">run</option>
-                                <option value="plan">plan</option>
-                                <option value="match">match</option>
-                            </select>
-                        </label>
-
-                        <label class="option">
-                            <span>Max Iterations</span>
-                            <input id="max-iterations" type="number" min="1" max="80" value="20" />
-                        </label>
-
-                        <label class="option">
-                            <span>Threshold</span>
-                            <input id="threshold" type="number" min="0" max="1" step="0.01" value="0.55" />
-                        </label>
-
-                        <label class="option checkbox-option">
-                            <input type="checkbox" id="record" checked /> Record
-                        </label>
-
-                        <label class="option checkbox-option">
-                            <input type="checkbox" id="screenshot" /> Screenshot
-                        </label>
-
-                        <label class="option checkbox-option">
-                            <input type="checkbox" id="show-llm" /> Show LLM
-                        </label>
-                    </div>
-                </details>
                 <div class="pill" id="status-pill">Ready</div>
             </div>
         </header>

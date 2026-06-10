@@ -4,6 +4,7 @@ export type UiCandidate = {
     id: number;
     role: string;
     text: string;
+    value: string;
     bbox: BBox;
     enabled: boolean;
     visible: boolean;
@@ -38,10 +39,12 @@ export function formatCandidatesForPrompt(candidates: UiCandidate[], limit = 30)
     for (const c of slice) {
         const kind = c.typeable ? 'input' : c.clickable ? 'button' : 'element';
         const safeText = (c.text ?? '').replace(/\s+/g, ' ').trim();
+        const safeValue = (c.value ?? '').replace(/\s+/g, ' ').trim();
         const textPart = safeText ? `text=${JSON.stringify(safeText)}` : 'text=""';
+        const valuePart = safeValue ? `value=${JSON.stringify(safeValue)}` : 'value=""';
         const bboxPart = `bbox=[${c.bbox[0]}, ${c.bbox[1]}, ${c.bbox[2]}, ${c.bbox[3]}]`;
         const statePart = `visible=${c.visible} enabled=${c.enabled}`;
-        lines.push(`Candidate ${c.id}: ${kind}, ${textPart}, ${bboxPart}, ${statePart}`);
+        lines.push(`Candidate ${c.id}: ${kind}, ${textPart}, ${valuePart}, ${bboxPart}, ${statePart}`);
     }
 
     return lines.join('\n');

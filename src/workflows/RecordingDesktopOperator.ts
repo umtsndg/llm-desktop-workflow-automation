@@ -67,6 +67,18 @@ export class RecordingDesktopOperator implements DesktopOperator {
                 const w = this.screenWidth;
                 const h = this.screenHeight;
                 uiTarget = this.uiTargetInfo(action.id);
+                try {
+                    console.error('[Desktop] Candidate action:', JSON.stringify({
+                        type: action.type,
+                        id: action.id,
+                        button: action.button ?? 'left',
+                        hint: (action as any).hint,
+                        target: uiTarget,
+                        clickPoint: pt,
+                    }));
+                } catch {
+                    console.error('[Desktop] Candidate action:', action);
+                }
                 if (pt && typeof w === 'number' && w > 0 && typeof h === 'number' && h > 0) {
                     actionToExecute = {
                         type: 'click',
